@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Type, Image as ImageIcon, Edit2, Square, Hand, Bold, Italic,
-  Trash2, Move, ChevronUp, ChevronDown, Plus, Minus, Info, ArrowRight, Loader2, AlignLeft, AlignCenter, AlignRight
+  Trash2, Move, ChevronUp, ChevronDown, Plus, Minus, Info, ArrowRight, Loader2, AlignLeft, AlignCenter, AlignRight, Copy
 } from 'lucide-react';
 import { extractPdfPages, exportPdfWithLayers } from '../../utils/pdfUtils';
 import './PDFEditor.css';
@@ -10,13 +10,18 @@ export default function PDFEditor({ file, onReset }) {
   const [loading, setLoading] = useState(true);
   const [pagesData, setPagesData] = useState([]);
   const [activePage, setActivePage] = useState(1);
-  const [zoom, setZoom] = useState(100);
-  const [toolMode, setToolMode] = useState('select'); // 'select', 'hand', 'draw'
+
+  // Internal Zoom scale starts at 200% (which displays to the user as "100%")
+  const [zoom, setZoom] = useState(200);
+  const [toolMode, setToolMode] = useState('select');
 
   // Layers state
   const [layers, setLayers] = useState([]);
   const [selectedLayerId, setSelectedLayerId] = useState(null);
   const [editingLayerId, setEditingLayerId] = useState(null);
+
+  // Clipboard for Copy/Paste
+  const copiedLayerRef = useRef(null);
 
   // Dragging & Resizing State
   const [isDragging, setIsDragging] = useState(false);
@@ -39,20 +44,6 @@ export default function PDFEditor({ file, onReset }) {
   const imageInputRef = useRef(null);
   const textareaRef = useRef(null);
 
-  // Auto calculate zoom scale to fill workspace (like in iLovePDF reference image 2)
-  const calculateAutoZoom = (pageWidth, pageHeight) => {
-    if (!workspaceRef.current || !pageWidth) return 140;
-    const availWidth = workspaceRef.current.clientWidth - 40;
-    const availHeight = workspaceRef.current.clientHeight - 40;
-
-    const scaleW = (availWidth / pageWidth) * 100;
-    const scaleH = (availHeight / pageHeight) * 100;
-
-    // Use scale that fills almost the entire space
-    const idealZoom = Math.min(scaleW, scaleH);
-    return Math.max(90, Math.round(idealZoom));
-  };
-
   // Load PDF pages on mount
   useEffect(() => {
     let isMounted = true;
@@ -63,13 +54,7 @@ export default function PDFEditor({ file, onReset }) {
         if (isMounted) {
           setPagesData(pages);
           setLayers([]);
-
-          if (pages.length > 0 && workspaceRef.current) {
-            const fitZoom = calculateAutoZoom(pages[0].width, pages[0].height);
-            setZoom(fitZoom);
-          } else {
-            setZoom(140);
-          }
+          setZoom(200); // 200% internal scale (displayed as 100%)
           setLoading(false);
         }
       } catch (err) {
@@ -81,18 +66,6 @@ export default function PDFEditor({ file, onReset }) {
     return () => { isMounted = false; };
   }, [file]);
 
-  // Recalculate zoom on window resize to keep filling workspace
-  useEffect(() => {
-    const handleResize = () => {
-      if (pagesData.length > 0) {
-        const currentPage = pagesData.find(p => p.pageNum === activePage) || pagesData[0];
-        setZoom(calculateAutoZoom(currentPage.width, currentPage.height));
-      }
-    };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [pagesData, activePage]);
-
   // Focus textarea when entering edit mode
   useEffect(() => {
     if (editingLayerId && textareaRef.current) {
@@ -101,6 +74,59 @@ export default function PDFEditor({ file, onReset }) {
   }, [editingLayerId]);
 
   const selectedLayer = layers.find(l => l.id === selectedLayerId);
+
+  // --------------------------------------------------------------------------
+  // COPY & PASTE SHORTCUTS (Cmd+C / Cmd+V & Ctrl+C / Ctrl+V)
+  // --------------------------------------------------------------------------
+  const handleCopySelectedLayer = useCallback(() => {
+    if (!selectedLayer) return;
+    copiedLayerRef.current = { ...selectedLayer };
+  }, [selectedLayer]);
+
+  const handlePasteLayer = useCallback(() => {
+    if (!copiedLayerRef.current) return;
+    const src = copiedLayerRef.current;
+    const newId = `layer_${Date.now()}`;
+
+    const pastedLayer = {
+      ...src,
+      id: newId,
+      pageNum: activePage,
+      x: src.x + 20,
+      y: src.y + 20,
+    };
+
+    setLayers(prev => [...prev, pastedLayer]);
+    setSelectedLayerId(newId);
+    setEditingLayerId(null);
+  }, [activePage]);
+
+  // Keyboard shortcut listener
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const isCmdOrCtrl = e.metaKey || e.ctrlKey;
+      const activeTag = document.activeElement?.tagName?.toLowerCase();
+
+      // Don't trigger copy/paste shortcut if typing in a text field unless text field isn't editing
+      if (isCmdOrCtrl && e.key.toLowerCase() === 'c') {
+        if (selectedLayer && activeTag !== 'textarea' && activeTag !== 'input') {
+          e.preventDefault();
+          handleCopySelectedLayer();
+        }
+      } else if (isCmdOrCtrl && e.key.toLowerCase() === 'v') {
+        if (copiedLayerRef.current && activeTag !== 'textarea' && activeTag !== 'input') {
+          e.preventDefault();
+          handlePasteLayer();
+        }
+      } else if (e.key === 'Escape') {
+        setSelectedLayerId(null);
+        setEditingLayerId(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedLayer, handleCopySelectedLayer, handlePasteLayer]);
 
   // 1. ADD TEXT LAYER
   const handleAddTextLayer = () => {
@@ -256,6 +282,7 @@ export default function PDFEditor({ file, onReset }) {
     });
   };
 
+  // Canvas Mouse Down (Deselect when clicking outside on blank space)
   const handleCanvasMouseDown = (e) => {
     if (toolMode === 'hand') {
       setIsPanning(true);
@@ -280,7 +307,7 @@ export default function PDFEditor({ file, onReset }) {
       return;
     }
 
-    // Deselect layer when clicking blank space
+    // DESELECT EVERYTHING WHEN CLICKING OUTSIDE
     setSelectedLayerId(null);
     setEditingLayerId(null);
   };
@@ -396,7 +423,7 @@ export default function PDFEditor({ file, onReset }) {
       <div className="pdf-editor-loading">
         <Loader2 size={44} className="spinner" />
         <h2>Cargando documento PDF...</h2>
-        <p>Generando vista previa ajustada a pantalla completa...</p>
+        <p>Generando vista previa nítida a pantalla completa...</p>
       </div>
     );
   }
@@ -404,11 +431,19 @@ export default function PDFEditor({ file, onReset }) {
   const currentPageData = pagesData.find(p => p.pageNum === activePage) || pagesData[0];
   const currentPageLayers = layers.filter(l => l.pageNum === activePage);
 
+  // Display zoom label (Internal scale 200% is shown as "100%")
+  const displayZoomPercent = Math.round(zoom / 2);
+
   return (
     <div
       className="pdf-editor-pro"
       onMouseMove={handleGlobalMouseMove}
       onMouseUp={handleGlobalMouseUp}
+      onClick={() => {
+        // Deselect if clicking outside
+        setSelectedLayerId(null);
+        setEditingLayerId(null);
+      }}
       id="pdf-editor-container"
     >
       <input
@@ -420,7 +455,7 @@ export default function PDFEditor({ file, onReset }) {
       />
 
       {/* 1. TOP FORMATTING TOOLBAR */}
-      <div className="editor-top-bar">
+      <div className="editor-top-bar" onClick={(e) => e.stopPropagation()}>
         <div className="editor-top-bar__formatting">
           <select
             className="editor-select editor-font-select"
@@ -514,8 +549,20 @@ export default function PDFEditor({ file, onReset }) {
 
           <div className="editor-divider" />
 
+          {/* Copy Layer Button */}
+          <button
+            className="editor-icon-btn"
+            onClick={handleCopySelectedLayer}
+            disabled={!selectedLayer}
+            title="Copiar capa (Cmd+C)"
+          >
+            <Copy size={16} />
+          </button>
+
+          <div className="editor-divider" />
+
           <div className="editor-pill-badge">
-            {zoom}%
+            {displayZoomPercent}%
           </div>
 
           <div className="editor-divider" />
@@ -532,7 +579,7 @@ export default function PDFEditor({ file, onReset }) {
       </div>
 
       {/* 2. SECONDARY TOOL STRIP */}
-      <div className="editor-tool-strip">
+      <div className="editor-tool-strip" onClick={(e) => e.stopPropagation()}>
         <div className="editor-mode-pill">
           <button className="editor-mode-tab active">
             <Type size={14} />
@@ -587,7 +634,7 @@ export default function PDFEditor({ file, onReset }) {
       {/* 3. MAIN WORKSPACE */}
       <div className="editor-main-workspace">
         {/* Left Thumbnails */}
-        <aside className="editor-left-thumbs">
+        <aside className="editor-left-thumbs" onClick={(e) => e.stopPropagation()}>
           {pagesData.map((p) => (
             <button
               key={p.pageNum}
@@ -602,7 +649,7 @@ export default function PDFEditor({ file, onReset }) {
           ))}
         </aside>
 
-        {/* Center Canvas Workspace (Auto Fill Space) */}
+        {/* Center Canvas Workspace */}
         <main
           ref={workspaceRef}
           className={`editor-canvas-workspace ${toolMode === 'hand' ? 'hand-mode' : ''} ${toolMode === 'draw' ? 'draw-mode' : ''}`}
@@ -721,7 +768,7 @@ export default function PDFEditor({ file, onReset }) {
                       />
                     )}
 
-                    {/* 8 Blue Control Handles for Resizing */}
+                    {/* 8 Blue Control Handles */}
                     {isSelected && !isEditing && (
                       <div className="editor-resize-handles">
                         <div className="handle handle-nw" onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 'nw')} />
@@ -740,8 +787,8 @@ export default function PDFEditor({ file, onReset }) {
             </div>
           </div>
 
-          {/* Floating Bottom Navigation Overlay (Floating above bottom edge) */}
-          <div className="editor-bottom-controls">
+          {/* Floating Bottom Navigation Overlay */}
+          <div className="editor-bottom-controls" onClick={(e) => e.stopPropagation()}>
             <button
               onClick={() => setActivePage(prev => Math.max(1, prev - 1))}
               disabled={activePage <= 1}
@@ -756,18 +803,18 @@ export default function PDFEditor({ file, onReset }) {
             </button>
             <span className="editor-page-indicator">{activePage} / {pagesData.length}</span>
             <div className="editor-divider-small" />
-            <button onClick={() => setZoom(prev => Math.max(40, prev - 10))} title="Alejar">
+            <button onClick={() => setZoom(prev => Math.max(80, prev - 20))} title="Alejar">
               <Minus size={14} />
             </button>
-            <button onClick={() => setZoom(prev => Math.min(300, prev + 10))} title="Acercar">
+            <button onClick={() => setZoom(prev => Math.min(500, prev + 20))} title="Acercar">
               <Plus size={14} />
             </button>
-            <span className="editor-zoom-indicator">{zoom}%</span>
+            <span className="editor-zoom-indicator">{displayZoomPercent}%</span>
           </div>
         </main>
 
         {/* Right Sidebar ("Editar PDF") */}
-        <aside className="editor-right-sidebar">
+        <aside className="editor-right-sidebar" onClick={(e) => e.stopPropagation()}>
           <div className="editor-sidebar-header">
             <h2>Editar PDF</h2>
           </div>
@@ -800,7 +847,8 @@ export default function PDFEditor({ file, onReset }) {
                   <div
                     key={layer.id}
                     className={`editor-layer-item ${isSelected ? 'selected' : ''}`}
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
                       setSelectedLayerId(layer.id);
                       setEditingLayerId(null);
                     }}
@@ -828,6 +876,15 @@ export default function PDFEditor({ file, onReset }) {
                     </div>
 
                     <div className="editor-layer-item-actions">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleCopySelectedLayer();
+                        }}
+                        title="Copiar capa"
+                      >
+                        <Copy size={14} />
+                      </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
