@@ -11,7 +11,7 @@ export default function PDFEditor({ file, onReset }) {
   const [pagesData, setPagesData] = useState([]);
   const [activePage, setActivePage] = useState(1);
 
-  // Internal Zoom scale starts at 200% (which displays to the user as "100%")
+  // Internal Zoom scale starts at 200% (displayed as "100%")
   const [zoom, setZoom] = useState(200);
   const [toolMode, setToolMode] = useState('select');
 
@@ -76,7 +76,7 @@ export default function PDFEditor({ file, onReset }) {
   const selectedLayer = layers.find(l => l.id === selectedLayerId);
 
   // --------------------------------------------------------------------------
-  // COPY & PASTE SHORTCUTS (Cmd+C / Cmd+V & Ctrl+C / Ctrl+V)
+  // COPY & PASTE SHORTCUTS
   // --------------------------------------------------------------------------
   const handleCopySelectedLayer = useCallback(() => {
     if (!selectedLayer) return;
@@ -107,7 +107,6 @@ export default function PDFEditor({ file, onReset }) {
       const isCmdOrCtrl = e.metaKey || e.ctrlKey;
       const activeTag = document.activeElement?.tagName?.toLowerCase();
 
-      // Don't trigger copy/paste shortcut if typing in a text field unless text field isn't editing
       if (isCmdOrCtrl && e.key.toLowerCase() === 'c') {
         if (selectedLayer && activeTag !== 'textarea' && activeTag !== 'input') {
           e.preventDefault();
@@ -239,7 +238,7 @@ export default function PDFEditor({ file, onReset }) {
   // MOUSE DRAGGING & RESIZING HANDLERS
   // --------------------------------------------------------------------------
   const handleLayerMouseDown = (e, layer) => {
-    e.stopPropagation();
+    e.stopPropagation(); // Prevents canvas click-outside handler from deselecting!
 
     if (editingLayerId === layer.id) return;
     if (toolMode === 'hand' || toolMode === 'draw') return;
@@ -282,7 +281,7 @@ export default function PDFEditor({ file, onReset }) {
     });
   };
 
-  // Canvas Mouse Down (Deselect when clicking outside on blank space)
+  // Canvas Mouse Down (Deselect ONLY when clicking blank canvas background)
   const handleCanvasMouseDown = (e) => {
     if (toolMode === 'hand') {
       setIsPanning(true);
@@ -307,9 +306,11 @@ export default function PDFEditor({ file, onReset }) {
       return;
     }
 
-    // DESELECT EVERYTHING WHEN CLICKING OUTSIDE
-    setSelectedLayerId(null);
-    setEditingLayerId(null);
+    // ONLY DESELECT WHEN CLICKING ON BLANK CANVAS / BACKGROUND AREA
+    if (e.target.classList.contains('editor-canvas-workspace') || e.target.classList.contains('editor-bg-image') || e.target.classList.contains('editor-page-container') || e.target.classList.contains('editor-page-scaler')) {
+      setSelectedLayerId(null);
+      setEditingLayerId(null);
+    }
   };
 
   const handleGlobalMouseMove = (e) => {
@@ -439,11 +440,6 @@ export default function PDFEditor({ file, onReset }) {
       className="pdf-editor-pro"
       onMouseMove={handleGlobalMouseMove}
       onMouseUp={handleGlobalMouseUp}
-      onClick={() => {
-        // Deselect if clicking outside
-        setSelectedLayerId(null);
-        setEditingLayerId(null);
-      }}
       id="pdf-editor-container"
     >
       <input
@@ -455,7 +451,7 @@ export default function PDFEditor({ file, onReset }) {
       />
 
       {/* 1. TOP FORMATTING TOOLBAR */}
-      <div className="editor-top-bar" onClick={(e) => e.stopPropagation()}>
+      <div className="editor-top-bar" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
         <div className="editor-top-bar__formatting">
           <select
             className="editor-select editor-font-select"
@@ -579,7 +575,7 @@ export default function PDFEditor({ file, onReset }) {
       </div>
 
       {/* 2. SECONDARY TOOL STRIP */}
-      <div className="editor-tool-strip" onClick={(e) => e.stopPropagation()}>
+      <div className="editor-tool-strip" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
         <div className="editor-mode-pill">
           <button className="editor-mode-tab active">
             <Type size={14} />
@@ -634,7 +630,7 @@ export default function PDFEditor({ file, onReset }) {
       {/* 3. MAIN WORKSPACE */}
       <div className="editor-main-workspace">
         {/* Left Thumbnails */}
-        <aside className="editor-left-thumbs" onClick={(e) => e.stopPropagation()}>
+        <aside className="editor-left-thumbs" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
           {pagesData.map((p) => (
             <button
               key={p.pageNum}
@@ -722,6 +718,7 @@ export default function PDFEditor({ file, onReset }) {
                     }}
                     onMouseDown={(e) => handleLayerMouseDown(e, layer)}
                     onDoubleClick={(e) => handleLayerDoubleClick(e, layer)}
+                    onClick={(e) => e.stopPropagation()}
                   >
                     {/* TEXT LAYER */}
                     {layer.type === 'text' && (
@@ -788,7 +785,7 @@ export default function PDFEditor({ file, onReset }) {
           </div>
 
           {/* Floating Bottom Navigation Overlay */}
-          <div className="editor-bottom-controls" onClick={(e) => e.stopPropagation()}>
+          <div className="editor-bottom-controls" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
             <button
               onClick={() => setActivePage(prev => Math.max(1, prev - 1))}
               disabled={activePage <= 1}
@@ -814,7 +811,7 @@ export default function PDFEditor({ file, onReset }) {
         </main>
 
         {/* Right Sidebar ("Editar PDF") */}
-        <aside className="editor-right-sidebar" onClick={(e) => e.stopPropagation()}>
+        <aside className="editor-right-sidebar" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
           <div className="editor-sidebar-header">
             <h2>Editar PDF</h2>
           </div>
