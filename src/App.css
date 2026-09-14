@@ -1,0 +1,15 @@
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  transition: opacity var(--transition-base);
+}
+
+.app--hidden {
+  display: none;
+}
+
+.app__main {
+  flex: 1;
+  padding-top: 64px; /* header height */
+}
