@@ -96,24 +96,71 @@ export async function exportPdfWithLayers(file, pagesData, layers) {
         }
 
         const [r, g, b] = hexToRgb(layer.color || '#000000');
+        const fontSize = (layer.fontSize || 16) * Math.min(scaleX, scaleY);
+        const lineHeight = fontSize * 1.15;
 
-        try {
-          const cleanText = layer.text.replace(/[^\x00-\x7F]/g, '');
-          pdfPage.drawText(cleanText || layer.text, {
-            x: pdfX + (4 * scaleX),
-            y: pdfY + (6 * scaleY),
-            size: (layer.fontSize || 16) * Math.min(scaleX, scaleY),
-            font,
-            color: rgb(r, g, b),
-          });
-        } catch (err) {
-          console.warn('Fallback drawing text:', err);
-          pdfPage.drawText(layer.text, {
-            x: pdfX + (4 * scaleX),
-            y: pdfY + (6 * scaleY),
-            size: (layer.fontSize || 16) * Math.min(scaleX, scaleY),
-            color: rgb(r, g, b),
-          });
+        const lines = wrapText(layer.text, font, fontSize, pdfW - (8 * scaleX));
+        let currentY = pdfY + pdfH - fontSize - (2 * scaleY);
+
+        for (const lineText of lines) {
+          if (currentY < pdfY - fontSize) break;
+
+          // Strategy: try original text first (pdf-lib standard fonts support WinAnsi
+          // which includes Latin accented chars: é á ó ú ñ ü etc.).
+          // Only fall back to stripping if pdf-lib actually throws an error.
+          let drawn = false;
+
+          // Attempt 1: draw original text as-is
+          try {
+            pdfPage.drawText(lineText, {
+              x: pdfX + (4 * scaleX),
+              y: currentY,
+              size: fontSize,
+              font,
+              color: rgb(r, g, b),
+            });
+            drawn = true;
+          } catch (_) { /* fall through */ }
+
+          // Attempt 2: NFD normalize — converts é→e+◌́, then strip combining marks only
+          // This preserves the base letter (e.g. é→e, ñ→n) instead of deleting the whole char
+          if (!drawn) {
+            try {
+              const normalized = lineText
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, ''); // strip combining diacritics only
+              if (normalized) {
+                pdfPage.drawText(normalized, {
+                  x: pdfX + (4 * scaleX),
+                  y: currentY,
+                  size: fontSize,
+                  font,
+                  color: rgb(r, g, b),
+                });
+                drawn = true;
+              }
+            } catch (_) { /* fall through */ }
+          }
+
+          // Attempt 3: last resort — strip everything outside ASCII
+          if (!drawn) {
+            try {
+              const asciiOnly = lineText.replace(/[^\x00-\x7F]/g, '');
+              if (asciiOnly) {
+                pdfPage.drawText(asciiOnly, {
+                  x: pdfX + (4 * scaleX),
+                  y: currentY,
+                  size: fontSize,
+                  font,
+                  color: rgb(r, g, b),
+                });
+              }
+            } catch (err) {
+              console.warn('Could not draw text line:', lineText, err);
+            }
+          }
+
+          currentY -= lineHeight;
         }
       }
 
@@ -141,7 +188,7 @@ export async function exportPdfWithLayers(file, pagesData, layers) {
 
       // 3. SHAPE LAYERS (Rectangles)
       else if (layer.type === 'shape') {
-        const [r, g, b] = hexToRgb(layer.color || '#e8003d');
+        const [r, g, b] = hexToRgb(layer.color || '#000000');
         const [bgR, bgG, bgB] = hexToRgb(layer.bgColor || 'transparent');
 
         pdfPage.drawRectangle({
@@ -155,21 +202,42 @@ export async function exportPdfWithLayers(file, pagesData, layers) {
         });
       }
 
-      // 4. FREEHAND DRAW LAYERS
+      // 4. FREEHAND DRAW LAYERS — exported as a single SVG path for smooth strokes (no veteado)
       else if (layer.type === 'draw' && layer.points && layer.points.length > 1) {
-        const [r, g, b] = hexToRgb(layer.color || '#e8003d');
+        const [r, g, b] = hexToRgb(layer.color || '#000000');
         const thickness = (layer.lineWidth || 3) * Math.min(scaleX, scaleY);
 
-        for (let j = 0; j < layer.points.length - 1; j++) {
-          const p1 = layer.points[j];
-          const p2 = layer.points[j + 1];
+        // Build SVG path string in PDF coordinate space (Y axis is inverted in PDF)
+        // layer.points are stored as absolute coordinates relative to the page canvas
+        const pathParts = layer.points.map((pt, idx) => {
+          const px = pt.x * scaleX;
+          const py = pdfPageHeight - (pt.y * scaleY);
+          return `${idx === 0 ? 'M' : 'L'} ${px.toFixed(3)} ${py.toFixed(3)}`;
+        });
 
-          pdfPage.drawLine({
-            start: { x: p1.x * scaleX, y: pdfPageHeight - (p1.y * scaleY) },
-            end: { x: p2.x * scaleX, y: pdfPageHeight - (p2.y * scaleY) },
-            color: rgb(r, g, b),
-            thickness,
+        const svgPath = pathParts.join(' ');
+
+        try {
+          pdfPage.drawSvgPath(svgPath, {
+            color: undefined,        // no fill
+            borderColor: rgb(r, g, b),
+            borderWidth: thickness,
+            borderLineCap: 1,        // Round cap (pdf-lib LineCapStyle.Round = 1)
+            borderLineJoin: 1,       // Round join (pdf-lib LineJoinStyle.Round = 1)
           });
+        } catch (svgErr) {
+          // Fallback: draw as individual line segments if SVG path fails
+          console.warn('SVG path draw failed, falling back to segments:', svgErr);
+          for (let j = 0; j < layer.points.length - 1; j++) {
+            const p1 = layer.points[j];
+            const p2 = layer.points[j + 1];
+            pdfPage.drawLine({
+              start: { x: p1.x * scaleX, y: pdfPageHeight - (p1.y * scaleY) },
+              end: { x: p2.x * scaleX, y: pdfPageHeight - (p2.y * scaleY) },
+              color: rgb(r, g, b),
+              thickness,
+            });
+          }
         }
       }
     }
@@ -196,4 +264,44 @@ function hexToRgb(hex) {
   const g = parseInt(clean.substring(2, 4), 16) / 255;
   const b = parseInt(clean.substring(4, 6), 16) / 255;
   return [isNaN(r) ? 0 : r, isNaN(g) ? 0 : g, isNaN(b) ? 0 : b];
+}
+
+function wrapText(text, font, fontSize, maxWidth) {
+  if (!text) return [];
+  const lines = text.split('\n');
+  const resultLines = [];
+
+  for (const line of lines) {
+    if (!line || line.trim() === '') {
+      resultLines.push('');
+      continue;
+    }
+    const words = line.split(' ');
+    let currentLine = '';
+
+    for (const word of words) {
+      const testLine = currentLine ? `${currentLine} ${word}` : word;
+      let width = 0;
+      try {
+        if (font && font.widthOfTextAtSize) {
+          width = font.widthOfTextAtSize(testLine, fontSize);
+        } else {
+          width = testLine.length * (fontSize * 0.5);
+        }
+      } catch (e) {
+        width = testLine.length * (fontSize * 0.5);
+      }
+
+      if (width <= maxWidth || !currentLine) {
+        currentLine = testLine;
+      } else {
+        resultLines.push(currentLine);
+        currentLine = word;
+      }
+    }
+    if (currentLine) {
+      resultLines.push(currentLine);
+    }
+  }
+  return resultLines;
 }
