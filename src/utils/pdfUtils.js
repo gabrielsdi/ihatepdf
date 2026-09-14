@@ -1,11 +1,11 @@
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Configure pdfjs worker dynamically from CDN if module URL not resolved
+// Configure pdfjs worker dynamically from CDN
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
 /**
- * Extracts pages, text items with positions, and renders page background images.
+ * Extracts pages, background images, and text items with precise positioning.
  */
 export async function extractPdfPages(file) {
   const arrayBuffer = await file.arrayBuffer();
@@ -18,7 +18,7 @@ export async function extractPdfPages(file) {
     const page = await pdfDoc.getPage(pageNum);
     const viewport = page.getViewport({ scale: 1.5 });
 
-    // Render background image to canvas
+    // Render page to high-res canvas background image
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d');
     canvas.width = viewport.width;
@@ -35,18 +35,23 @@ export async function extractPdfPages(file) {
       if (!item.str || item.str.trim().length === 0) return;
 
       const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
-      // tx[4] = left, tx[5] = top (from top of viewport)
       const fontSize = Math.abs(item.transform[0] || item.transform[3] || 12) * viewport.scale;
 
       items.push({
-        id: `p${pageNum}_i${index}`,
+        id: `extracted_p${pageNum}_${index}`,
+        pageNum,
+        type: 'text',
         originalText: item.str,
         text: item.str,
         x: tx[4],
         y: tx[5] - fontSize,
-        width: item.width * viewport.scale,
-        height: fontSize * 1.2,
-        fontSize: Math.max(10, Math.min(48, Math.round(fontSize / 1.5))), // normalized fontSize
+        width: Math.max(60, item.width * viewport.scale),
+        height: fontSize * 1.3,
+        fontSize: Math.max(12, Math.round(fontSize / 1.5)),
+        fontFamily: 'Arial',
+        isBold: false,
+        isItalic: false,
+        color: '#000000',
         pdfX: item.transform[4],
         pdfY: item.transform[5],
         pdfWidth: item.width,
@@ -61,7 +66,7 @@ export async function extractPdfPages(file) {
       pdfWidth: page.view[2] - page.view[0],
       pdfHeight: page.view[3] - page.view[1],
       bgImageUrl,
-      items,
+      extractedItems: items,
     });
   }
 
@@ -69,14 +74,18 @@ export async function extractPdfPages(file) {
 }
 
 /**
- * Exports modified PDF using pdf-lib by covering edited text with white boxes and writing new text.
+ * Exports modified PDF burning all draggable text layers into the PDF document.
  */
-export async function exportPdfWithTextEdits(file, pagesData, addedBlocks = []) {
+export async function exportPdfWithLayers(file, pagesData, layers) {
   const fileArrayBuffer = await file.arrayBuffer();
   const pdfDoc = await PDFDocument.load(fileArrayBuffer);
 
-  // Embed standard font
-  const helveticaFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  // Standard fonts
+  const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const helveticaOblique = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+  const helveticaBoldOblique = await pdfDoc.embedFont(StandardFonts.HelveticaBoldOblique);
+
   const pdfPages = pdfDoc.getPages();
 
   for (let i = 0; i < pagesData.length; i++) {
@@ -85,76 +94,65 @@ export async function exportPdfWithTextEdits(file, pagesData, addedBlocks = []) 
     if (!pdfPage) continue;
 
     const { height: pdfPageHeight } = pdfPage.getSize();
+    const scaleX = pageData.pdfWidth / pageData.width;
+    const scaleY = pageData.pdfHeight / pageData.height;
 
-    // Process edited text items
-    pageData.items.forEach((item) => {
-      // Check if text was modified or deleted
-      if (item.text !== item.originalText) {
-        const itemX = item.pdfX;
-        const itemY = item.pdfY;
-        const itemW = Math.max(item.pdfWidth, (item.originalText.length * item.pdfHeight * 0.5));
-        const itemH = item.pdfHeight || item.fontSize || 12;
+    // Filter layers for current page
+    const pageLayers = layers.filter(l => l.pageNum === pageData.pageNum);
 
-        // Cover old text with a white rectangle
+    for (const layer of pageLayers) {
+      if (!layer.text || !layer.text.trim()) continue;
+
+      // Select font style
+      let font = helvetica;
+      if (layer.isBold && layer.isItalic) font = helveticaBoldOblique;
+      else if (layer.isBold) font = helveticaBoldBold || helveticaBold;
+      else if (layer.isItalic) font = helveticaOblique;
+
+      // Calculate PDF coordinates (PDF origin is bottom-left)
+      let pdfX, pdfY;
+
+      if (layer.pdfX !== undefined && layer.pdfY !== undefined) {
+        // If layer was extracted from original text, calculate position
+        pdfX = layer.pdfX + ((layer.x - (layer.initialX || layer.x)) * scaleX);
+        pdfY = layer.pdfY - ((layer.y - (layer.initialY || layer.y)) * scaleY);
+
+        // Cover old text with a clean white rectangle
         pdfPage.drawRectangle({
-          x: itemX - 1,
-          y: itemY - 2,
-          width: itemW + 4,
-          height: itemH + 4,
+          x: layer.pdfX - 1,
+          y: layer.pdfY - 2,
+          width: Math.max(layer.pdfWidth, (layer.originalText || '').length * (layer.pdfHeight || 12) * 0.5) + 4,
+          height: (layer.pdfHeight || layer.fontSize) + 4,
           color: rgb(1, 1, 1),
         });
-
-        // Draw new text if not empty
-        if (item.text && item.text.trim()) {
-          try {
-            // Sanitize text for standard font (remove non-latin special characters if needed)
-            const cleanText = item.text.replace(/[^\x00-\x7F]/g, '');
-
-            pdfPage.drawText(cleanText || item.text, {
-              x: itemX,
-              y: itemY,
-              size: item.fontSize || 12,
-              font: helveticaFont,
-              color: rgb(0.1, 0.1, 0.1),
-            });
-          } catch (e) {
-            console.warn('Font encoding fallback:', e);
-            pdfPage.drawText(item.text, {
-              x: itemX,
-              y: itemY,
-              size: item.fontSize || 12,
-              color: rgb(0.1, 0.1, 0.1),
-            });
-          }
-        }
+      } else {
+        // User added new layer
+        pdfX = layer.x * scaleX;
+        pdfY = pdfPageHeight - ((layer.y + (layer.height || 30)) * scaleY);
       }
-    });
 
-    // Process user added custom text blocks
-    const pageAdded = addedBlocks.filter(b => b.pageNum === pageData.pageNum);
-    pageAdded.forEach((b) => {
-      if (!b.text || !b.text.trim()) return;
-
-      // Scale coordinates from canvas space to PDF space
-      const scaleX = pageData.pdfWidth / pageData.width;
-      const scaleY = pageData.pdfHeight / pageData.height;
-
-      const pdfX = b.x * scaleX;
-      const pdfY = pdfPageHeight - (b.y * scaleY);
+      // Parse color
+      const [r, g, b] = hexToRgb(layer.color || '#000000');
 
       try {
-        const cleanText = b.text.replace(/[^\x00-\x7F]/g, '');
-        pdfPage.drawText(cleanText || b.text, {
+        const cleanText = layer.text.replace(/[^\x00-\x7F]/g, '');
+        pdfPage.drawText(cleanText || layer.text, {
           x: pdfX,
-          y: pdfY - (b.fontSize || 14),
-          size: (b.fontSize || 14) * scaleY,
-          font: helveticaFont,
-          color: rgb(0, 0, 0),
+          y: pdfY,
+          size: (layer.fontSize || 16) * Math.min(scaleX, scaleY),
+          font,
+          color: rgb(r, g, b),
         });
       } catch (err) {
-        console.warn('Failed to draw custom text:', err);
+        console.warn('Fallback drawing text:', err);
+        pdfPage.drawText(layer.text, {
+          x: pdfX,
+          y: pdfY,
+          size: (layer.fontSize || 16) * Math.min(scaleX, scaleY),
+          color: rgb(r, g, b),
+        });
       }
-    });
+    }
   }
 
   // Save modified PDF
@@ -169,4 +167,12 @@ export async function exportPdfWithTextEdits(file, pagesData, addedBlocks = []) 
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+function hexToRgb(hex) {
+  const clean = hex.replace('#', '');
+  const r = parseInt(clean.substring(0, 2), 16) / 255;
+  const g = parseInt(clean.substring(2, 4), 16) / 255;
+  const b = parseInt(clean.substring(4, 6), 16) / 255;
+  return [r, g, b] || [0, 0, 0];
 }
