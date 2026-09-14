@@ -10,13 +10,13 @@ export default function PDFEditor({ file, onReset }) {
   const [loading, setLoading] = useState(true);
   const [pagesData, setPagesData] = useState([]);
   const [activePage, setActivePage] = useState(1);
-  const [zoom, setZoom] = useState(130); // Higher scale so PDF occupies full vertical/horizontal space
+  const [zoom, setZoom] = useState(100);
   const [toolMode, setToolMode] = useState('select'); // 'select', 'hand', 'draw'
 
   // Layers state
   const [layers, setLayers] = useState([]);
   const [selectedLayerId, setSelectedLayerId] = useState(null);
-  const [editingLayerId, setEditingLayerId] = useState(null); // Track double-clicked editing state
+  const [editingLayerId, setEditingLayerId] = useState(null);
 
   // Dragging & Resizing State
   const [isDragging, setIsDragging] = useState(false);
@@ -39,6 +39,20 @@ export default function PDFEditor({ file, onReset }) {
   const imageInputRef = useRef(null);
   const textareaRef = useRef(null);
 
+  // Auto calculate zoom scale to fill workspace (like in iLovePDF reference image 2)
+  const calculateAutoZoom = (pageWidth, pageHeight) => {
+    if (!workspaceRef.current || !pageWidth) return 140;
+    const availWidth = workspaceRef.current.clientWidth - 40;
+    const availHeight = workspaceRef.current.clientHeight - 40;
+
+    const scaleW = (availWidth / pageWidth) * 100;
+    const scaleH = (availHeight / pageHeight) * 100;
+
+    // Use scale that fills almost the entire space
+    const idealZoom = Math.min(scaleW, scaleH);
+    return Math.max(90, Math.round(idealZoom));
+  };
+
   // Load PDF pages on mount
   useEffect(() => {
     let isMounted = true;
@@ -49,6 +63,13 @@ export default function PDFEditor({ file, onReset }) {
         if (isMounted) {
           setPagesData(pages);
           setLayers([]);
+
+          if (pages.length > 0 && workspaceRef.current) {
+            const fitZoom = calculateAutoZoom(pages[0].width, pages[0].height);
+            setZoom(fitZoom);
+          } else {
+            setZoom(140);
+          }
           setLoading(false);
         }
       } catch (err) {
@@ -59,6 +80,18 @@ export default function PDFEditor({ file, onReset }) {
     loadPdf();
     return () => { isMounted = false; };
   }, [file]);
+
+  // Recalculate zoom on window resize to keep filling workspace
+  useEffect(() => {
+    const handleResize = () => {
+      if (pagesData.length > 0) {
+        const currentPage = pagesData.find(p => p.pageNum === activePage) || pagesData[0];
+        setZoom(calculateAutoZoom(currentPage.width, currentPage.height));
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [pagesData, activePage]);
 
   // Focus textarea when entering edit mode
   useEffect(() => {
@@ -80,11 +113,11 @@ export default function PDFEditor({ file, onReset }) {
       pageNum: activePage,
       type: 'text',
       text: `Tu texto aquí ${count}`,
-      x: 120,
-      y: 120 + (count * 30),
-      width: 320,
+      x: 100,
+      y: 100 + (count * 30),
+      width: 340,
       height: 70,
-      fontSize: 32,
+      fontSize: 36,
       fontFamily: 'Arial',
       isBold: true,
       isItalic: false,
@@ -114,10 +147,10 @@ export default function PDFEditor({ file, onReset }) {
         pageNum: activePage,
         type: 'image',
         imageDataUrl,
-        x: 140,
-        y: 140,
-        width: 220,
-        height: 160,
+        x: 120,
+        y: 120,
+        width: 240,
+        height: 180,
       };
 
       setLayers(prev => [...prev, newLayer]);
@@ -137,9 +170,9 @@ export default function PDFEditor({ file, onReset }) {
       pageNum: activePage,
       type: 'shape',
       shapeType: 'rect',
-      x: 160,
-      y: 160,
-      width: 240,
+      x: 140,
+      y: 140,
+      width: 260,
       height: 140,
       color: '#e8003d',
       bgColor: 'transparent',
@@ -182,11 +215,7 @@ export default function PDFEditor({ file, onReset }) {
   const handleLayerMouseDown = (e, layer) => {
     e.stopPropagation();
 
-    // IF ACTIVELY EDITING TEXT, DO NOT START DRAGGING (allows natural text highlighting)
-    if (editingLayerId === layer.id) {
-      return;
-    }
-
+    if (editingLayerId === layer.id) return;
     if (toolMode === 'hand' || toolMode === 'draw') return;
 
     setSelectedLayerId(layer.id);
@@ -206,7 +235,7 @@ export default function PDFEditor({ file, onReset }) {
     if (layer.type === 'text') {
       setSelectedLayerId(layer.id);
       setEditingLayerId(layer.id);
-      setIsDragging(false); // Stop dragging when double-clicking to edit
+      setIsDragging(false);
     }
   };
 
@@ -214,7 +243,7 @@ export default function PDFEditor({ file, onReset }) {
     e.stopPropagation();
     e.preventDefault();
     setSelectedLayerId(layer.id);
-    setEditingLayerId(null); // Exit text editing mode when resizing
+    setEditingLayerId(null);
     setIsResizing(true);
     setResizeHandle(handleType);
 
@@ -227,7 +256,6 @@ export default function PDFEditor({ file, onReset }) {
     });
   };
 
-  // Canvas Mouse Down (Deselect when clicking outside on blank canvas)
   const handleCanvasMouseDown = (e) => {
     if (toolMode === 'hand') {
       setIsPanning(true);
@@ -252,13 +280,12 @@ export default function PDFEditor({ file, onReset }) {
       return;
     }
 
-    // DESELECT EVERYTHING ON CLICK OUTSIDE
+    // Deselect layer when clicking blank space
     setSelectedLayerId(null);
     setEditingLayerId(null);
   };
 
   const handleGlobalMouseMove = (e) => {
-    // 1. PAN / HAND TOOL SCROLLING
     if (isPanning && workspaceRef.current) {
       const dx = e.clientX - panStart.x;
       const dy = e.clientY - panStart.y;
@@ -267,7 +294,6 @@ export default function PDFEditor({ file, onReset }) {
       return;
     }
 
-    // 2. FREEHAND DRAWING
     if (isDrawing && canvasRef.current) {
       const scale = zoom / 100;
       const bounds = canvasRef.current.getBoundingClientRect();
@@ -279,13 +305,11 @@ export default function PDFEditor({ file, onReset }) {
       return;
     }
 
-    // DO NOT DRAG/RESIZE IF USER IS EDITING TEXT INSIDE TEXTAREA
     if (editingLayerId || !selectedLayer || (!isDragging && !isResizing) || !canvasRef.current) return;
 
     const scale = zoom / 100;
     const canvasBounds = canvasRef.current.getBoundingClientRect();
 
-    // 3. LAYER DRAGGING
     if (isDragging) {
       const mouseXCanvas = (e.clientX - canvasBounds.left) / scale;
       const mouseYCanvas = (e.clientY - canvasBounds.top) / scale;
@@ -296,10 +320,7 @@ export default function PDFEditor({ file, onReset }) {
       setLayers(prev =>
         prev.map(l => l.id === selectedLayer.id ? { ...l, x: newX, y: newY } : l)
       );
-    }
-
-    // 4. LAYER RESIZING
-    else if (isResizing) {
+    } else if (isResizing) {
       const dx = (e.clientX - resizeStart.x) / scale;
       const dy = (e.clientY - resizeStart.y) / scale;
 
@@ -375,7 +396,7 @@ export default function PDFEditor({ file, onReset }) {
       <div className="pdf-editor-loading">
         <Loader2 size={44} className="spinner" />
         <h2>Cargando documento PDF...</h2>
-        <p>Generando vista previa nítida a pantalla completa...</p>
+        <p>Generando vista previa ajustada a pantalla completa...</p>
       </div>
     );
   }
@@ -390,7 +411,6 @@ export default function PDFEditor({ file, onReset }) {
       onMouseUp={handleGlobalMouseUp}
       id="pdf-editor-container"
     >
-      {/* Hidden file input for image layer */}
       <input
         type="file"
         ref={imageInputRef}
@@ -582,7 +602,7 @@ export default function PDFEditor({ file, onReset }) {
           ))}
         </aside>
 
-        {/* Center Canvas Workspace (Fills 100% Space) */}
+        {/* Center Canvas Workspace (Auto Fill Space) */}
         <main
           ref={workspaceRef}
           className={`editor-canvas-workspace ${toolMode === 'hand' ? 'hand-mode' : ''} ${toolMode === 'draw' ? 'draw-mode' : ''}`}
@@ -720,7 +740,7 @@ export default function PDFEditor({ file, onReset }) {
             </div>
           </div>
 
-          {/* Floating Bottom Navigation Overlay */}
+          {/* Floating Bottom Navigation Overlay (Floating above bottom edge) */}
           <div className="editor-bottom-controls">
             <button
               onClick={() => setActivePage(prev => Math.max(1, prev - 1))}
@@ -739,7 +759,7 @@ export default function PDFEditor({ file, onReset }) {
             <button onClick={() => setZoom(prev => Math.max(40, prev - 10))} title="Alejar">
               <Minus size={14} />
             </button>
-            <button onClick={() => setZoom(prev => Math.min(250, prev + 10))} title="Acercar">
+            <button onClick={() => setZoom(prev => Math.min(300, prev + 10))} title="Acercar">
               <Plus size={14} />
             </button>
             <span className="editor-zoom-indicator">{zoom}%</span>
