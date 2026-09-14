@@ -43,6 +43,8 @@ export default function PDFEditor({ file, onReset }) {
   const canvasRef = useRef(null);
   const imageInputRef = useRef(null);
   const textareaRef = useRef(null);
+  // Map of layerId -> textarea DOM node, for measuring scrollHeight after resize
+  const layerTextareaRefs = useRef({});
 
   // Load PDF pages on mount
   useEffect(() => {
@@ -66,10 +68,11 @@ export default function PDFEditor({ file, onReset }) {
     return () => { isMounted = false; };
   }, [file]);
 
-  // Focus textarea when entering edit mode & auto-adjust height
+  // Focus textarea when entering edit mode & auto-adjust height/width
   useEffect(() => {
     if (editingLayerId && textareaRef.current) {
       textareaRef.current.focus();
+      // Auto-adjust height to scrollHeight
       textareaRef.current.style.height = 'auto';
       textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
     }
@@ -129,7 +132,7 @@ export default function PDFEditor({ file, onReset }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedLayer, handleCopySelectedLayer, handlePasteLayer]);
 
-  // 1. ADD TEXT LAYER (Auto-fitting height and width)
+  // 1. ADD TEXT LAYER (Auto-adjusting width & height, 36px font, non-bold)
   const handleAddTextLayer = () => {
     const pageLayers = layers.filter(l => l.pageNum === activePage);
     const count = pageLayers.length + 1;
@@ -142,9 +145,9 @@ export default function PDFEditor({ file, onReset }) {
       text: `Tu texto aquí ${count}`,
       x: 100,
       y: 100 + (count * 30),
-      width: null, // Auto-fit width to text
-      height: null, // Auto-fit height to text
-      fontSize: 36,
+      width: null, // null means AUTO-FIT width to text content!
+      height: null, // null means AUTO-FIT height to text content!
+      fontSize: 24,
       fontFamily: 'Arial',
       isBold: false,
       isItalic: false,
@@ -285,6 +288,65 @@ export default function PDFEditor({ file, onReset }) {
     });
   };
 
+  // ---------------------------------------------------------------------------
+  // SNAP TEXT LAYER to tightly fit its content (used after resize + on deselect)
+  // ---------------------------------------------------------------------------
+  const snapTextLayerToContent = (layer) => {
+    if (!layer || layer.type !== 'text') return;
+    const taEl = layerTextareaRefs.current[layer.id];
+    if (!taEl) return;
+
+    const fs = layer.fontSize || 24;
+    const ff = layer.fontFamily || 'Arial';
+    const fw = layer.isBold ? 'bold' : 'normal';
+    const fi = layer.isItalic ? 'italic' : 'normal';
+    const text = layer.text || ' ';
+
+    const baseStyles = [
+      'position:fixed', 'visibility:hidden', 'pointer-events:none',
+      'top:-9999px', 'left:-9999px',
+      `font-size:${fs}px`, `font-family:${ff}`,
+      `font-weight:${fw}`, `font-style:${fi}`,
+      'line-height:1.15', 'padding:2px 4px', 'box-sizing:border-box',
+    ];
+
+    // 1. Natural (single-line) width
+    const widthProbe = document.createElement('div');
+    widthProbe.style.cssText = [...baseStyles, 'white-space:pre'].join(';');
+    const longestLine = text.split('\n').reduce((a, b) => b.length > a.length ? b : a, '');
+    widthProbe.textContent = longestLine || ' ';
+    document.body.appendChild(widthProbe);
+    const naturalWidth = Math.ceil(widthProbe.getBoundingClientRect().width) + 4;
+    document.body.removeChild(widthProbe);
+
+    // 2. Live container width in document coords (unscaled)
+    const scale = zoom / 100;
+    const containerEl = taEl.parentElement;
+    const liveWidth = containerEl
+      ? Math.round(containerEl.getBoundingClientRect().width / scale)
+      : (layer.width || naturalWidth);
+    const snappedWidth = Math.max(40, Math.min(liveWidth, naturalWidth));
+
+    // 3. Height at snappedWidth
+    const heightProbe = document.createElement('div');
+    heightProbe.style.cssText = [
+      ...baseStyles,
+      'white-space:pre-wrap', 'word-break:break-word', 'overflow-wrap:break-word',
+      `width:${snappedWidth}px`,
+    ].join(';');
+    heightProbe.textContent = text;
+    document.body.appendChild(heightProbe);
+    const snappedHeight = Math.ceil(heightProbe.getBoundingClientRect().height);
+    document.body.removeChild(heightProbe);
+
+    // 4. Commit
+    setLayers(prev =>
+      prev.map(l =>
+        l.id === layer.id ? { ...l, width: snappedWidth, height: snappedHeight } : l
+      )
+    );
+  };
+
   const handleCanvasMouseDown = (e) => {
     if (toolMode === 'hand') {
       setIsPanning(true);
@@ -310,6 +372,10 @@ export default function PDFEditor({ file, onReset }) {
     }
 
     if (e.target.classList.contains('editor-canvas-workspace') || e.target.classList.contains('editor-bg-image') || e.target.classList.contains('editor-page-container') || e.target.classList.contains('editor-page-scaler')) {
+      // Auto-fit the text layer before deselecting
+      if (selectedLayer?.type === 'text') {
+        snapTextLayerToContent(selectedLayer);
+      }
       setSelectedLayerId(null);
       setEditingLayerId(null);
     }
@@ -352,35 +418,48 @@ export default function PDFEditor({ file, onReset }) {
       );
     } else if (isResizing) {
       const dx = (e.clientX - resizeStart.x) / scale;
+      const dy = (e.clientY - resizeStart.y) / scale;
 
       let newWidth = resizeStart.width;
+      let newHeight = resizeStart.height;
 
       if (resizeHandle.includes('e')) newWidth = Math.max(40, resizeStart.width + dx);
+      if (resizeHandle.includes('s')) newHeight = Math.max(20, resizeStart.height + dy);
       if (resizeHandle.includes('w')) {
         const potentialW = resizeStart.width - dx;
         if (potentialW > 40) newWidth = potentialW;
+      }
+      if (resizeHandle.includes('n')) {
+        const potentialH = resizeStart.height - dy;
+        if (potentialH > 20) newHeight = potentialH;
       }
 
       setLayers(prev =>
         prev.map(l => l.id === selectedLayer.id ? {
           ...l,
           width: newWidth,
-          height: null // Keep height auto-snapped to text line height!
+          height: newHeight
         } : l)
       );
     }
   };
 
   const handleGlobalMouseUp = () => {
+    const wasResizing = isResizing;
+    const resizingLayerId = selectedLayer?.id;
+    const resizingLayerType = selectedLayer?.type;
+    const resizingLayer = selectedLayer;
+
     setIsDragging(false);
     setIsResizing(false);
     setIsPanning(false);
     setResizeHandle(null);
 
-    // Auto snap text layer heights to content
-    setLayers(prev =>
-      prev.map(l => l.type === 'text' ? { ...l, height: null } : l)
-    );
+    // After resize ends on a text layer: snap BOTH width and height to tightly fit text
+    if (wasResizing && resizingLayerType === 'text' && resizingLayerId && resizingLayer) {
+      setTimeout(() => snapTextLayerToContent(resizingLayer), 0);
+    }
+
 
     if (isDrawing && currentStroke.length > 1) {
       setIsDrawing(false);
@@ -398,6 +477,7 @@ export default function PDFEditor({ file, onReset }) {
       setToolMode('select');
     }
   };
+
 
   // Export PDF
   const handleExport = async () => {
@@ -462,7 +542,7 @@ export default function PDFEditor({ file, onReset }) {
             <span className="editor-size-icon">T</span>
             <select
               className="editor-select editor-size-select"
-              value={selectedLayer?.fontSize || 36}
+              value={selectedLayer?.fontSize || 24}
               onChange={(e) => updateSelectedLayer('fontSize', parseInt(e.target.value))}
               disabled={!selectedLayer || selectedLayer.type !== 'text'}
             >
@@ -701,12 +781,16 @@ export default function PDFEditor({ file, onReset }) {
                 return (
                   <div
                     key={layer.id}
-                    className={`editor-layer-box ${layer.type === 'text' ? 'text-layer-box' : ''} ${isSelected ? 'selected' : ''} ${isEditing ? 'editing' : ''}`}
+                    className={`editor-layer-box ${isSelected ? 'selected' : ''} ${isEditing ? 'editing' : ''}`}
                     style={{
                       left: `${layer.x}px`,
                       top: `${layer.y}px`,
                       width: layer.width ? `${layer.width}px` : 'fit-content',
+                      // Text layers: height is auto (driven by textarea scrollHeight)
+                      // Image/shape layers: use fixed layer.height
                       height: layer.type === 'text' ? 'auto' : (layer.height ? `${layer.height}px` : 'auto'),
+                      minWidth: '60px',
+                      minHeight: layer.type === 'text' ? 'unset' : '36px',
                     }}
                     onMouseDown={(e) => handleLayerMouseDown(e, layer)}
                     onDoubleClick={(e) => handleLayerDoubleClick(e, layer)}
@@ -715,16 +799,31 @@ export default function PDFEditor({ file, onReset }) {
                     {/* TEXT LAYER */}
                     {layer.type === 'text' && (
                       <textarea
-                        ref={isEditing ? textareaRef : null}
+                        ref={(el) => {
+                          // Track in layerTextareaRefs for resize snapping
+                          if (el) layerTextareaRefs.current[layer.id] = el;
+                          else delete layerTextareaRefs.current[layer.id];
+                          // Also assign to textareaRef when editing
+                          if (isEditing) textareaRef.current = el;
+                        }}
                         className={`editor-layer-textarea ${isEditing ? 'active-input' : 'readonly-input'}`}
                         value={layer.text}
                         readOnly={!isEditing}
                         onChange={(e) => {
                           const val = e.target.value;
-                          setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, text: val } : l));
+                          // When text changes, auto-grow height and clear fixed height on layer
+                          const taEl = layerTextareaRefs.current[layer.id];
+                          if (taEl) {
+                            taEl.style.height = 'auto';
+                            const newH = taEl.scrollHeight;
+                            taEl.style.height = `${newH}px`;
+                            setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, text: val, height: newH } : l));
+                          } else {
+                            setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, text: val } : l));
+                          }
                         }}
                         style={{
-                          fontSize: `${layer.fontSize || 36}px`,
+                          fontSize: `${layer.fontSize || 24}px`,
                           fontFamily: layer.fontFamily || 'Arial',
                           fontWeight: layer.isBold ? 'bold' : 'normal',
                           fontStyle: layer.isItalic ? 'italic' : 'normal',
@@ -732,6 +831,8 @@ export default function PDFEditor({ file, onReset }) {
                           backgroundColor: layer.bgColor || 'transparent',
                           textAlign: layer.align || 'left',
                           pointerEvents: isEditing ? 'auto' : 'none',
+                          // Height driven by layer.height when set
+                          height: layer.height ? `${layer.height}px` : 'auto',
                         }}
                       />
                     )}
