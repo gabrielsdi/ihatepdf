@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  base: '/ihatepdf/',
+  base: process.env.VERCEL ? '/' : '/ihatepdf/',
   optimizeDeps: {
     include: ['pdfjs-dist'],
   },
