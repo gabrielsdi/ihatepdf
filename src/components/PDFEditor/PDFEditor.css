@@ -236,6 +236,12 @@
   color: #111827;
 }
 
+.editor-tool-btn.active {
+  background-color: #eff6ff;
+  color: #2563eb;
+  border: 1px solid #bfdbfe;
+}
+
 .editor-tool-btn--highlight {
   color: var(--color-primary);
   background-color: #fff0f3;
@@ -304,7 +310,7 @@
   color: #6b7280;
 }
 
-/* Center Canvas Area */
+/* Center Canvas Workspace (Auto Fill Space) */
 .editor-canvas-workspace {
   flex: 1;
   background-color: #e5e7eb;
@@ -312,15 +318,33 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 32px;
+  padding: 24px;
   position: relative;
+}
+
+.editor-canvas-workspace.hand-mode {
+  cursor: grab;
+}
+
+.editor-canvas-workspace.hand-mode:active {
+  cursor: grabbing;
+}
+
+.editor-canvas-workspace.draw-mode {
+  cursor: crosshair;
 }
 
 .editor-page-container {
   position: relative;
   background-color: #ffffff;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+  box-shadow: 0 12px 36px rgba(0,0,0,0.18);
   margin: 0 auto;
+}
+
+.editor-page-scaler {
+  position: relative;
+  width: 100%;
+  height: 100%;
 }
 
 .editor-bg-image {
@@ -330,21 +354,31 @@
   pointer-events: none;
 }
 
-/* Draggable Text Layers */
-.editor-text-layer {
+/* Freehand Drawing SVG Overlay */
+.editor-draw-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* Layer Boxes */
+.editor-layer-box {
   position: absolute;
   border: 1px dashed transparent;
   cursor: move;
   display: flex;
   align-items: center;
-  padding: 2px 4px;
+  z-index: 10;
 }
 
-.editor-text-layer:hover {
+.editor-layer-box:hover {
   border-color: #3b82f6;
 }
 
-.editor-text-layer.selected {
+.editor-layer-box.selected {
   border: 2px solid #2563eb;
   box-shadow: 0 0 0 1px rgba(255,255,255,0.8);
   z-index: 100;
@@ -357,16 +391,26 @@
   border: none;
   outline: none;
   resize: none;
-  line-height: 1.2;
+  line-height: 1.15;
   overflow: hidden;
-  padding: 0;
+  padding: 2px 4px;
   margin: 0;
-  font-size: inherit;
-  font-family: inherit;
-  font-weight: inherit;
-  font-style: inherit;
-  color: inherit;
-  text-align: inherit;
+  box-sizing: border-box;
+}
+
+.editor-layer-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.editor-layer-shape {
+  width: 100%;
+  height: 100%;
+  border-width: 3px;
+  border-style: solid;
+  box-sizing: border-box;
 }
 
 /* 8 Blue Resize Handles (Exact match to screenshot blue square controls) */
@@ -389,7 +433,7 @@
 .handle-sw { bottom: -5px; left: -5px; cursor: nesw-resize; }
 .handle-w  { top: calc(50% - 5px); left: -5px; cursor: ew-resize; }
 
-/* Floating Bottom Navigation Overlay (Exact match to screenshot) */
+/* Floating Bottom Navigation Overlay */
 .editor-bottom-controls {
   position: sticky;
   bottom: 16px;
@@ -434,7 +478,7 @@
   font-weight: 600;
 }
 
-/* Right Sidebar ("Editar PDF" - Exact match to screenshot) */
+/* Right Sidebar ("Editar PDF") */
 .editor-right-sidebar {
   width: 320px;
   background-color: #ffffff;
@@ -451,7 +495,6 @@
   margin-bottom: 16px;
 }
 
-/* Info Callout Banner */
 .editor-info-banner {
   background-color: #e0f2fe;
   color: #0369a1;
@@ -581,7 +624,7 @@
   color: #0f172a;
 }
 
-/* Guardar Cambios Button (Big Solid Red Button in screenshot) */
+/* Guardar Cambios Button */
 .editor-sidebar-footer {
   margin-top: auto;
 }

@@ -16,7 +16,6 @@ export async function extractPdfPages(file) {
 
   for (let pageNum = 1; pageNum <= numPages; pageNum++) {
     const page = await pdfDoc.getPage(pageNum);
-    // Render at high resolution (scale 2.0) for crisp clean text rendering
     const viewport = page.getViewport({ scale: 2.0 });
 
     const canvas = document.createElement('canvas');
@@ -24,7 +23,6 @@ export async function extractPdfPages(file) {
     canvas.width = viewport.width;
     canvas.height = viewport.height;
 
-    // Fill white background before rendering
     context.fillStyle = '#ffffff';
     context.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -33,8 +31,8 @@ export async function extractPdfPages(file) {
 
     pages.push({
       pageNum,
-      width: viewport.width / 2.0, // normalized page width in CSS pixels
-      height: viewport.height / 2.0, // normalized page height in CSS pixels
+      width: viewport.width / 2.0,
+      height: viewport.height / 2.0,
       pdfWidth: page.view[2] - page.view[0],
       pdfHeight: page.view[3] - page.view[1],
       bgImageUrl,
@@ -45,7 +43,7 @@ export async function extractPdfPages(file) {
 }
 
 /**
- * Exports modified PDF burning all user added draggable layers into the PDF document.
+ * Exports modified PDF burning all text, image, draw, and shape layers into the PDF document.
  */
 export async function exportPdfWithLayers(file, pagesData, layers) {
   const fileArrayBuffer = await file.arrayBuffer();
@@ -68,54 +66,111 @@ export async function exportPdfWithLayers(file, pagesData, layers) {
     const scaleX = pageData.pdfWidth / pageData.width;
     const scaleY = pageData.pdfHeight / pageData.height;
 
-    // Filter layers for current page
     const pageLayers = layers.filter(l => l.pageNum === pageData.pageNum);
 
     for (const layer of pageLayers) {
-      if (!layer.text || !layer.text.trim()) continue;
-
-      // Select font style
-      let font = helvetica;
-      if (layer.isBold && layer.isItalic) font = helveticaBoldOblique;
-      else if (layer.isBold) font = helveticaBold;
-      else if (layer.isItalic) font = helveticaOblique;
-
-      // Calculate PDF coordinates (PDF origin is bottom-left)
       const pdfX = layer.x * scaleX;
-      const pdfY = pdfPageHeight - ((layer.y + (layer.height || 30)) * scaleY);
+      const pdfY = pdfPageHeight - ((layer.y + (layer.height || 40)) * scaleY);
+      const pdfW = (layer.width || 100) * scaleX;
+      const pdfH = (layer.height || 40) * scaleY;
 
-      // Draw background rectangle if fill color set (e.g. white box to cover original text)
-      if (layer.bgColor && layer.bgColor !== 'transparent') {
-        const [bgR, bgG, bgB] = hexToRgb(layer.bgColor);
+      // 1. TEXT LAYERS
+      if (layer.type === 'text') {
+        if (!layer.text || !layer.text.trim()) continue;
+
+        let font = helvetica;
+        if (layer.isBold && layer.isItalic) font = helveticaBoldOblique;
+        else if (layer.isBold) font = helveticaBold;
+        else if (layer.isItalic) font = helveticaOblique;
+
+        // Optional background fill box (e.g. white to cover original text)
+        if (layer.bgColor && layer.bgColor !== 'transparent') {
+          const [bgR, bgG, bgB] = hexToRgb(layer.bgColor);
+          pdfPage.drawRectangle({
+            x: pdfX,
+            y: pdfY,
+            width: pdfW,
+            height: pdfH,
+            color: rgb(bgR, bgG, bgB),
+          });
+        }
+
+        const [r, g, b] = hexToRgb(layer.color || '#000000');
+
+        try {
+          const cleanText = layer.text.replace(/[^\x00-\x7F]/g, '');
+          pdfPage.drawText(cleanText || layer.text, {
+            x: pdfX + (4 * scaleX),
+            y: pdfY + (6 * scaleY),
+            size: (layer.fontSize || 16) * Math.min(scaleX, scaleY),
+            font,
+            color: rgb(r, g, b),
+          });
+        } catch (err) {
+          console.warn('Fallback drawing text:', err);
+          pdfPage.drawText(layer.text, {
+            x: pdfX + (4 * scaleX),
+            y: pdfY + (6 * scaleY),
+            size: (layer.fontSize || 16) * Math.min(scaleX, scaleY),
+            color: rgb(r, g, b),
+          });
+        }
+      }
+
+      // 2. IMAGE LAYERS
+      else if (layer.type === 'image' && layer.imageDataUrl) {
+        try {
+          let embeddedImg;
+          if (layer.imageDataUrl.startsWith('data:image/png')) {
+            embeddedImg = await pdfDoc.embedPng(layer.imageDataUrl);
+          } else {
+            // Convert JPEG or other formats
+            embeddedImg = await pdfDoc.embedJpg(layer.imageDataUrl);
+          }
+
+          pdfPage.drawImage(embeddedImg, {
+            x: pdfX,
+            y: pdfY,
+            width: pdfW,
+            height: pdfH,
+          });
+        } catch (imgErr) {
+          console.warn('Could not embed image layer into PDF:', imgErr);
+        }
+      }
+
+      // 3. SHAPE LAYERS (Rectangles)
+      else if (layer.type === 'shape') {
+        const [r, g, b] = hexToRgb(layer.color || '#e8003d');
+        const [bgR, bgG, bgB] = hexToRgb(layer.bgColor || 'transparent');
+
         pdfPage.drawRectangle({
           x: pdfX,
           y: pdfY,
-          width: (layer.width || 120) * scaleX,
-          height: (layer.height || 40) * scaleY,
-          color: rgb(bgR, bgG, bgB),
+          width: pdfW,
+          height: pdfH,
+          borderColor: rgb(r, g, b),
+          borderWidth: 2 * scaleX,
+          color: layer.bgColor !== 'transparent' ? rgb(bgR, bgG, bgB) : undefined,
         });
       }
 
-      // Parse text color
-      const [r, g, b] = hexToRgb(layer.color || '#000000');
+      // 4. FREEHAND DRAW LAYERS
+      else if (layer.type === 'draw' && layer.points && layer.points.length > 1) {
+        const [r, g, b] = hexToRgb(layer.color || '#e8003d');
+        const thickness = (layer.lineWidth || 3) * Math.min(scaleX, scaleY);
 
-      try {
-        const cleanText = layer.text.replace(/[^\x00-\x7F]/g, '');
-        pdfPage.drawText(cleanText || layer.text, {
-          x: pdfX + (4 * scaleX),
-          y: pdfY + (4 * scaleY),
-          size: (layer.fontSize || 16) * Math.min(scaleX, scaleY),
-          font,
-          color: rgb(r, g, b),
-        });
-      } catch (err) {
-        console.warn('Fallback drawing text:', err);
-        pdfPage.drawText(layer.text, {
-          x: pdfX + (4 * scaleX),
-          y: pdfY + (4 * scaleY),
-          size: (layer.fontSize || 16) * Math.min(scaleX, scaleY),
-          color: rgb(r, g, b),
-        });
+        for (let j = 0; j < layer.points.length - 1; j++) {
+          const p1 = layer.points[j];
+          const p2 = layer.points[j + 1];
+
+          pdfPage.drawLine({
+            start: { x: p1.x * scaleX, y: pdfPageHeight - (p1.y * scaleY) },
+            end: { x: p2.x * scaleX, y: pdfPageHeight - (p2.y * scaleY) },
+            color: rgb(r, g, b),
+            thickness,
+          });
+        }
       }
     }
   }
@@ -140,5 +195,5 @@ function hexToRgb(hex) {
   const r = parseInt(clean.substring(0, 2), 16) / 255;
   const g = parseInt(clean.substring(2, 4), 16) / 255;
   const b = parseInt(clean.substring(4, 6), 16) / 255;
-  return [r || 0, g || 0, b || 0];
+  return [isNaN(r) ? 0 : r, isNaN(g) ? 0 : g, isNaN(b) ? 0 : b];
 }

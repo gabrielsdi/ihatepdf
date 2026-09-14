@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import {
-  Type, Image as ImageIcon, Edit2, Square, Hand, Bold, Italic, Underline,
+  Type, Image as ImageIcon, Edit2, Square, Hand, Bold, Italic,
   Trash2, Move, ChevronUp, ChevronDown, Plus, Minus, Info, ArrowRight, Loader2, AlignLeft, AlignCenter, AlignRight
 } from 'lucide-react';
 import { extractPdfPages, exportPdfWithLayers } from '../../utils/pdfUtils';
@@ -10,10 +10,10 @@ export default function PDFEditor({ file, onReset }) {
   const [loading, setLoading] = useState(true);
   const [pagesData, setPagesData] = useState([]);
   const [activePage, setActivePage] = useState(1);
-  const [zoom, setZoom] = useState(85);
-  const [toolMode, setToolMode] = useState('edit');
+  const [zoom, setZoom] = useState(110); // Auto-fit fill workspace (110%)
+  const [toolMode, setToolMode] = useState('select'); // 'select', 'hand', 'draw', 'text', 'shape'
 
-  // Layers state (starts clean, empty by default)
+  // Layers state
   const [layers, setLayers] = useState([]);
   const [selectedLayerId, setSelectedLayerId] = useState(null);
 
@@ -24,8 +24,18 @@ export default function PDFEditor({ file, onReset }) {
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [resizeStart, setResizeStart] = useState({ x: 0, y: 0, width: 0, height: 0, fontSize: 16 });
 
+  // Pan / Hand tool state
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 });
+
+  // Freehand Draw state
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [currentStroke, setCurrentStroke] = useState([]);
+
   const [exporting, setExporting] = useState(false);
+  const workspaceRef = useRef(null);
   const canvasRef = useRef(null);
+  const imageInputRef = useRef(null);
 
   // Load PDF pages on mount
   useEffect(() => {
@@ -36,7 +46,7 @@ export default function PDFEditor({ file, onReset }) {
         const pages = await extractPdfPages(file);
         if (isMounted) {
           setPagesData(pages);
-          setLayers([]); // Start clean without overlapping text
+          setLayers([]);
           setLoading(false);
         }
       } catch (err) {
@@ -50,7 +60,7 @@ export default function PDFEditor({ file, onReset }) {
 
   const selectedLayer = layers.find(l => l.id === selectedLayerId);
 
-  // Add new text layer (like "Tu texto aquí 1" in screenshot)
+  // 1. ADD TEXT LAYER
   const handleAddTextLayer = () => {
     const pageLayers = layers.filter(l => l.pageNum === activePage);
     const count = pageLayers.length + 1;
@@ -61,21 +71,73 @@ export default function PDFEditor({ file, onReset }) {
       pageNum: activePage,
       type: 'text',
       text: `Tu texto aquí ${count}`,
-      x: 180,
-      y: 180 + (count * 25),
-      width: 280,
-      height: 60,
+      x: 140,
+      y: 140 + (count * 30),
+      width: 300,
+      height: 70,
       fontSize: 32,
       fontFamily: 'Arial',
       isBold: true,
       isItalic: false,
       color: '#000000',
-      bgColor: 'transparent', // Can be '#ffffff' to cover original text
+      bgColor: 'transparent',
       align: 'left',
     };
 
     setLayers(prev => [...prev, newLayer]);
     setSelectedLayerId(newId);
+    setToolMode('select');
+  };
+
+  // 2. ADD IMAGE LAYER
+  const handleImageFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const imageDataUrl = event.target.result;
+      const newId = `image_${Date.now()}`;
+
+      // Create image layer
+      const newLayer = {
+        id: newId,
+        pageNum: activePage,
+        type: 'image',
+        imageDataUrl,
+        x: 160,
+        y: 160,
+        width: 200,
+        height: 150,
+      };
+
+      setLayers(prev => [...prev, newLayer]);
+      setSelectedLayerId(newId);
+      setToolMode('select');
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  // 3. ADD SHAPE LAYER (RECTANGLE)
+  const handleAddShapeLayer = () => {
+    const newId = `shape_${Date.now()}`;
+    const newLayer = {
+      id: newId,
+      pageNum: activePage,
+      type: 'shape',
+      shapeType: 'rect',
+      x: 180,
+      y: 180,
+      width: 220,
+      height: 120,
+      color: '#e8003d',
+      bgColor: 'transparent',
+    };
+
+    setLayers(prev => [...prev, newLayer]);
+    setSelectedLayerId(newId);
+    setToolMode('select');
   };
 
   // Update selected layer property
@@ -101,71 +163,175 @@ export default function PDFEditor({ file, onReset }) {
     setSelectedLayerId(null);
   };
 
-  // Dragging logic
-  const handleMouseDown = (e, layer, handleType = null) => {
+  // --------------------------------------------------------------------------
+  // MOUSE DRAGGING & RESIZING HANDLERS
+  // --------------------------------------------------------------------------
+  const handleLayerMouseDown = (e, layer) => {
     e.stopPropagation();
-    setSelectedLayerId(layer.id);
+    if (toolMode === 'hand' || toolMode === 'draw') return;
 
-    if (handleType) {
-      setIsResizing(true);
-      setResizeHandle(handleType);
-      setResizeStart({
+    setSelectedLayerId(layer.id);
+    setIsDragging(true);
+
+    const scale = zoom / 100;
+    const canvasBounds = canvasRef.current.getBoundingClientRect();
+
+    setDragOffset({
+      x: (e.clientX - canvasBounds.left) / scale - layer.x,
+      y: (e.clientY - canvasBounds.top) / scale - layer.y,
+    });
+  };
+
+  const handleResizeHandleMouseDown = (e, layer, handleType) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setSelectedLayerId(layer.id);
+    setIsResizing(true);
+    setResizeHandle(handleType);
+
+    setResizeStart({
+      x: e.clientX,
+      y: e.clientY,
+      width: layer.width || 150,
+      height: layer.height || 50,
+      fontSize: layer.fontSize || 16,
+      layerX: layer.x,
+      layerY: layer.y,
+    });
+  };
+
+  // Canvas Mouse Down (For Pan mode or Drawing mode)
+  const handleCanvasMouseDown = (e) => {
+    if (toolMode === 'hand') {
+      setIsPanning(true);
+      setPanStart({
         x: e.clientX,
         y: e.clientY,
-        width: layer.width || 200,
-        height: layer.height || 50,
-        fontSize: layer.fontSize || 16,
+        scrollLeft: workspaceRef.current.scrollLeft,
+        scrollTop: workspaceRef.current.scrollTop,
       });
-    } else {
-      setIsDragging(true);
-      const bounds = e.currentTarget.getBoundingClientRect();
-      setDragOffset({
-        x: e.clientX - bounds.left,
-        y: e.clientY - bounds.top,
-      });
+      return;
     }
+
+    if (toolMode === 'draw' && canvasRef.current) {
+      setIsDrawing(true);
+      const scale = zoom / 100;
+      const bounds = canvasRef.current.getBoundingClientRect();
+      const pt = {
+        x: (e.clientX - bounds.left) / scale,
+        y: (e.clientY - bounds.top) / scale,
+      };
+      setCurrentStroke([pt]);
+      return;
+    }
+
+    // Unselect layer when clicking blank canvas
+    setSelectedLayerId(null);
   };
 
-  const handleMouseMove = (e) => {
-    if (!selectedLayer || (!isDragging && !isResizing)) return;
+  const handleGlobalMouseMove = (e) => {
+    // 1. PAN / HAND TOOL SCROLLING
+    if (isPanning && workspaceRef.current) {
+      const dx = e.clientX - panStart.x;
+      const dy = e.clientY - panStart.y;
+      workspaceRef.current.scrollLeft = panStart.scrollLeft - dx;
+      workspaceRef.current.scrollTop = panStart.scrollTop - dy;
+      return;
+    }
 
-    if (canvasRef.current) {
-      const canvasBounds = canvasRef.current.getBoundingClientRect();
+    // 2. FREEHAND DRAWING
+    if (isDrawing && canvasRef.current) {
+      const scale = zoom / 100;
+      const bounds = canvasRef.current.getBoundingClientRect();
+      const pt = {
+        x: (e.clientX - bounds.left) / scale,
+        y: (e.clientY - bounds.top) / scale,
+      };
+      setCurrentStroke(prev => [...prev, pt]);
+      return;
+    }
 
-      if (isDragging) {
-        const newX = (e.clientX - canvasBounds.left - dragOffset.x) / (zoom / 100);
-        const newY = (e.clientY - canvasBounds.top - dragOffset.y) / (zoom / 100);
+    if (!selectedLayer || (!isDragging && !isResizing) || !canvasRef.current) return;
 
-        setLayers(prev =>
-          prev.map(l => l.id === selectedLayer.id ? { ...l, x: Math.max(0, newX), y: Math.max(0, newY) } : l)
-        );
-      } else if (isResizing) {
-        const dx = (e.clientX - resizeStart.x) / (zoom / 100);
-        const dy = (e.clientY - resizeStart.y) / (zoom / 100);
+    const scale = zoom / 100;
+    const canvasBounds = canvasRef.current.getBoundingClientRect();
 
-        let newWidth = resizeStart.width;
-        let newHeight = resizeStart.height;
-        let newFontSize = resizeStart.fontSize;
+    // 3. LAYER DRAGGING
+    if (isDragging) {
+      const mouseXCanvas = (e.clientX - canvasBounds.left) / scale;
+      const mouseYCanvas = (e.clientY - canvasBounds.top) / scale;
 
-        if (resizeHandle.includes('r')) newWidth = Math.max(60, resizeStart.width + dx);
-        if (resizeHandle.includes('b')) newHeight = Math.max(30, resizeStart.height + dy);
+      const newX = Math.max(0, mouseXCanvas - dragOffset.x);
+      const newY = Math.max(0, mouseYCanvas - dragOffset.y);
 
-        if (resizeHandle === 'se' || resizeHandle === 'sw') {
-          const scale = newWidth / resizeStart.width;
-          newFontSize = Math.max(10, Math.min(120, Math.round(resizeStart.fontSize * scale)));
+      setLayers(prev =>
+        prev.map(l => l.id === selectedLayer.id ? { ...l, x: newX, y: newY } : l)
+      );
+    }
+
+    // 4. LAYER RESIZING
+    else if (isResizing) {
+      const dx = (e.clientX - resizeStart.x) / scale;
+      const dy = (e.clientY - resizeStart.y) / scale;
+
+      let newWidth = resizeStart.width;
+      let newHeight = resizeStart.height;
+      let newFontSize = resizeStart.fontSize;
+
+      if (resizeHandle.includes('e')) newWidth = Math.max(40, resizeStart.width + dx);
+      if (resizeHandle.includes('s')) newHeight = Math.max(20, resizeStart.height + dy);
+      if (resizeHandle.includes('w')) {
+        const potentialW = resizeStart.width - dx;
+        if (potentialW > 40) {
+          newWidth = potentialW;
         }
-
-        setLayers(prev =>
-          prev.map(l => l.id === selectedLayer.id ? { ...l, width: newWidth, height: newHeight, fontSize: newFontSize } : l)
-        );
       }
+      if (resizeHandle.includes('n')) {
+        const potentialH = resizeStart.height - dy;
+        if (potentialH > 20) {
+          newHeight = potentialH;
+        }
+      }
+
+      // Proportional font sizing for corner handles
+      if (['se', 'sw', 'ne', 'nw'].includes(resizeHandle)) {
+        const scaleFactor = newWidth / resizeStart.width;
+        newFontSize = Math.max(10, Math.min(120, Math.round(resizeStart.fontSize * scaleFactor)));
+      }
+
+      setLayers(prev =>
+        prev.map(l => l.id === selectedLayer.id ? {
+          ...l,
+          width: newWidth,
+          height: newHeight,
+          fontSize: newFontSize
+        } : l)
+      );
     }
   };
 
-  const handleMouseUp = () => {
+  const handleGlobalMouseUp = () => {
     setIsDragging(false);
     setIsResizing(false);
+    setIsPanning(false);
     setResizeHandle(null);
+
+    // Save completed drawing stroke as a layer
+    if (isDrawing && currentStroke.length > 1) {
+      setIsDrawing(false);
+      const newId = `draw_${Date.now()}`;
+      const newLayer = {
+        id: newId,
+        pageNum: activePage,
+        type: 'draw',
+        points: currentStroke,
+        color: '#e8003d',
+        lineWidth: 4,
+      };
+      setLayers(prev => [...prev, newLayer]);
+      setCurrentStroke([]);
+      setToolMode('select');
+    }
   };
 
   // Export PDF
@@ -186,7 +352,7 @@ export default function PDFEditor({ file, onReset }) {
       <div className="pdf-editor-loading">
         <Loader2 size={44} className="spinner" />
         <h2>Cargando documento PDF...</h2>
-        <p>Generando vista previa nítida y limpia...</p>
+        <p>Generando vista previa nítida a tamaño completo...</p>
       </div>
     );
   }
@@ -197,10 +363,19 @@ export default function PDFEditor({ file, onReset }) {
   return (
     <div
       className="pdf-editor-pro"
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
+      onMouseMove={handleGlobalMouseMove}
+      onMouseUp={handleGlobalMouseUp}
       id="pdf-editor-container"
     >
+      {/* Hidden image file input for Image Upload tool */}
+      <input
+        type="file"
+        ref={imageInputRef}
+        accept="image/*"
+        onChange={handleImageFileSelect}
+        style={{ display: 'none' }}
+      />
+
       {/* 1. TOP FORMATTING TOOLBAR */}
       <div className="editor-top-bar">
         <div className="editor-top-bar__formatting">
@@ -209,7 +384,7 @@ export default function PDFEditor({ file, onReset }) {
             className="editor-select editor-font-select"
             value={selectedLayer?.fontFamily || 'Arial'}
             onChange={(e) => updateSelectedLayer('fontFamily', e.target.value)}
-            disabled={!selectedLayer}
+            disabled={!selectedLayer || selectedLayer.type !== 'text'}
           >
             <option value="Arial">Arial</option>
             <option value="Helvetica">Helvetica</option>
@@ -225,7 +400,7 @@ export default function PDFEditor({ file, onReset }) {
               className="editor-select editor-size-select"
               value={selectedLayer?.fontSize || 36}
               onChange={(e) => updateSelectedLayer('fontSize', parseInt(e.target.value))}
-              disabled={!selectedLayer}
+              disabled={!selectedLayer || selectedLayer.type !== 'text'}
             >
               {[12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 54, 64, 72].map(s => (
                 <option key={s} value={s}>{s}</option>
@@ -235,11 +410,11 @@ export default function PDFEditor({ file, onReset }) {
 
           <div className="editor-divider" />
 
-          {/* Bold, Italic, Underline */}
+          {/* Bold & Italic */}
           <button
             className={`editor-icon-btn ${selectedLayer?.isBold ? 'active' : ''}`}
             onClick={() => updateSelectedLayer('isBold', !selectedLayer?.isBold)}
-            disabled={!selectedLayer}
+            disabled={!selectedLayer || selectedLayer.type !== 'text'}
             title="Negrita"
           >
             <Bold size={16} />
@@ -247,14 +422,14 @@ export default function PDFEditor({ file, onReset }) {
           <button
             className={`editor-icon-btn ${selectedLayer?.isItalic ? 'active' : ''}`}
             onClick={() => updateSelectedLayer('isItalic', !selectedLayer?.isItalic)}
-            disabled={!selectedLayer}
+            disabled={!selectedLayer || selectedLayer.type !== 'text'}
             title="Cursiva"
           >
             <Italic size={16} />
           </button>
 
           {/* Text Color Picker */}
-          <div className="editor-color-btn-wrapper" title="Color de texto">
+          <div className="editor-color-btn-wrapper" title="Color de elemento">
             <span className="editor-color-label" style={{ color: selectedLayer?.color || '#000' }}>A</span>
             <input
               type="color"
@@ -265,7 +440,7 @@ export default function PDFEditor({ file, onReset }) {
             />
           </div>
 
-          {/* Cover background box toggle (White box to replace existing PDF text) */}
+          {/* Cover background box toggle (White box to replace text) */}
           <button
             className={`editor-icon-btn ${selectedLayer?.bgColor === '#ffffff' ? 'active' : ''}`}
             onClick={() => updateSelectedLayer('bgColor', selectedLayer?.bgColor === '#ffffff' ? 'transparent' : '#ffffff')}
@@ -281,21 +456,21 @@ export default function PDFEditor({ file, onReset }) {
           <button
             className={`editor-icon-btn ${selectedLayer?.align === 'left' ? 'active' : ''}`}
             onClick={() => updateSelectedLayer('align', 'left')}
-            disabled={!selectedLayer}
+            disabled={!selectedLayer || selectedLayer.type !== 'text'}
           >
             <AlignLeft size={16} />
           </button>
           <button
             className={`editor-icon-btn ${selectedLayer?.align === 'center' ? 'active' : ''}`}
             onClick={() => updateSelectedLayer('align', 'center')}
-            disabled={!selectedLayer}
+            disabled={!selectedLayer || selectedLayer.type !== 'text'}
           >
             <AlignCenter size={16} />
           </button>
           <button
             className={`editor-icon-btn ${selectedLayer?.align === 'right' ? 'active' : ''}`}
             onClick={() => updateSelectedLayer('align', 'right')}
-            disabled={!selectedLayer}
+            disabled={!selectedLayer || selectedLayer.type !== 'text'}
           >
             <AlignRight size={16} />
           </button>
@@ -323,30 +498,25 @@ export default function PDFEditor({ file, onReset }) {
       {/* 2. SECONDARY TOOL STRIP */}
       <div className="editor-tool-strip">
         <div className="editor-mode-pill">
-          <button
-            className={`editor-mode-tab ${toolMode === 'annotate' ? 'active' : ''}`}
-            onClick={() => setToolMode('annotate')}
-          >
-            <Edit2 size={14} />
-            <span>Anotar</span>
-          </button>
-          <button
-            className={`editor-mode-tab ${toolMode === 'edit' ? 'active' : ''}`}
-            onClick={() => setToolMode('edit')}
-          >
+          <button className="editor-mode-tab active">
             <Type size={14} />
-            <span>Editar</span>
+            <span>Editar PDF</span>
             <span className="editor-crown-icon">👑</span>
           </button>
         </div>
 
         <div className="editor-divider-vertical" />
 
-        <button className="editor-tool-btn" title="Mover / Seleccionar">
+        {/* 1. Hand Tool (Pan/Move canvas) */}
+        <button
+          className={`editor-tool-btn ${toolMode === 'hand' ? 'active' : ''}`}
+          onClick={() => setToolMode('hand')}
+          title="Herramienta Manito (Desplazar vista)"
+        >
           <Hand size={18} />
         </button>
 
-        {/* Big Add Text Button */}
+        {/* 2. Add Text Tool (A|) */}
         <button
           className="editor-tool-btn editor-tool-btn--highlight"
           onClick={handleAddTextLayer}
@@ -355,15 +525,30 @@ export default function PDFEditor({ file, onReset }) {
           <span className="editor-text-add-icon">A|</span>
         </button>
 
-        <button className="editor-tool-btn" title="Añadir Imagen" onClick={handleAddTextLayer}>
+        {/* 3. Add Image Tool (🖼️) */}
+        <button
+          className="editor-tool-btn"
+          onClick={() => imageInputRef.current?.click()}
+          title="Añadir Imagen"
+        >
           <ImageIcon size={18} />
         </button>
 
-        <button className="editor-tool-btn" title="Dibujar libremente">
+        {/* 4. Freehand Draw Tool (✏️) */}
+        <button
+          className={`editor-tool-btn ${toolMode === 'draw' ? 'active' : ''}`}
+          onClick={() => setToolMode('draw')}
+          title="Dibujar a mano alzada"
+        >
           <Edit2 size={18} />
         </button>
 
-        <button className="editor-tool-btn" title="Añadir Formas">
+        {/* 5. Add Shape Tool (⬜) */}
+        <button
+          className="editor-tool-btn"
+          onClick={handleAddShapeLayer}
+          title="Añadir Forma / Rectángulo"
+        >
           <Square size={18} />
         </button>
       </div>
@@ -386,10 +571,11 @@ export default function PDFEditor({ file, onReset }) {
           ))}
         </aside>
 
-        {/* Center Canvas Workspace */}
+        {/* Center Canvas Workspace (Auto Fill Space) */}
         <main
-          className="editor-canvas-workspace"
-          onClick={() => setSelectedLayerId(null)}
+          ref={workspaceRef}
+          className={`editor-canvas-workspace ${toolMode === 'hand' ? 'hand-mode' : ''} ${toolMode === 'draw' ? 'draw-mode' : ''}`}
+          onMouseDown={handleCanvasMouseDown}
         >
           <div
             ref={canvasRef}
@@ -397,77 +583,130 @@ export default function PDFEditor({ file, onReset }) {
             style={{
               width: `${(currentPageData?.width || 800) * (zoom / 100)}px`,
               height: `${(currentPageData?.height || 1100) * (zoom / 100)}px`,
-              transform: `scale(${zoom / 100})`,
-              transformOrigin: 'top center',
             }}
           >
-            {/* CLEAN PDF Page Background Image */}
-            <img
-              src={currentPageData?.bgImageUrl}
-              alt={`Página ${currentPageData?.pageNum}`}
-              className="editor-bg-image"
-            />
+            <div
+              className="editor-page-scaler"
+              style={{
+                width: `${currentPageData?.width || 800}px`,
+                height: `${currentPageData?.height || 1100}px`,
+                transform: `scale(${zoom / 100})`,
+                transformOrigin: 'top left',
+              }}
+            >
+              {/* CLEAN PDF Page Background Image */}
+              <img
+                src={currentPageData?.bgImageUrl}
+                alt={`Página ${currentPageData?.pageNum}`}
+                className="editor-bg-image"
+              />
 
-            {/* User Added Interactive Layers */}
-            {currentPageLayers.map((layer) => {
-              const isSelected = selectedLayerId === layer.id;
-
-              return (
-                <div
-                  key={layer.id}
-                  className={`editor-text-layer ${isSelected ? 'selected' : ''}`}
-                  style={{
-                    left: `${layer.x}px`,
-                    top: `${layer.y}px`,
-                    width: layer.width ? `${layer.width}px` : 'auto',
-                    height: layer.height ? `${layer.height}px` : 'auto',
-                    fontSize: `${layer.fontSize}px`,
-                    fontFamily: layer.fontFamily || 'Arial',
-                    fontWeight: layer.isBold ? 'bold' : 'normal',
-                    fontStyle: layer.isItalic ? 'italic' : 'normal',
-                    color: layer.color || '#000000',
-                    backgroundColor: layer.bgColor || 'transparent',
-                    textAlign: layer.align || 'left',
-                  }}
-                  onMouseDown={(e) => handleMouseDown(e, layer)}
-                >
-                  <textarea
-                    className="editor-layer-textarea"
-                    value={layer.text}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, text: val } : l));
-                    }}
-                    style={{
-                      fontSize: 'inherit',
-                      fontFamily: 'inherit',
-                      fontWeight: 'inherit',
-                      fontStyle: 'inherit',
-                      color: 'inherit',
-                      textAlign: 'inherit',
-                    }}
-                    onClick={(e) => e.stopPropagation()}
+              {/* Freehand Drawings SVG overlay */}
+              <svg className="editor-draw-svg">
+                {currentPageLayers.filter(l => l.type === 'draw').map(l => (
+                  <path
+                    key={l.id}
+                    d={l.points.reduce((acc, pt, idx) => `${acc} ${idx === 0 ? 'M' : 'L'} ${pt.x} ${pt.y}`, '')}
+                    stroke={l.color || '#e8003d'}
+                    strokeWidth={l.lineWidth || 4}
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
                   />
+                ))}
 
-                  {/* 8 Blue Resize Handles */}
-                  {isSelected && (
-                    <div className="editor-resize-handles">
-                      <div className="handle handle-nw" onMouseDown={(e) => handleMouseDown(e, layer, 'nw')} />
-                      <div className="handle handle-n"  onMouseDown={(e) => handleMouseDown(e, layer, 'n')} />
-                      <div className="handle handle-ne" onMouseDown={(e) => handleMouseDown(e, layer, 'ne')} />
-                      <div className="handle handle-e"  onMouseDown={(e) => handleMouseDown(e, layer, 'e')} />
-                      <div className="handle handle-se" onMouseDown={(e) => handleMouseDown(e, layer, 'se')} />
-                      <div className="handle handle-s"  onMouseDown={(e) => handleMouseDown(e, layer, 's')} />
-                      <div className="handle handle-sw" onMouseDown={(e) => handleMouseDown(e, layer, 'sw')} />
-                      <div className="handle handle-w"  onMouseDown={(e) => handleMouseDown(e, layer, 'w')} />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                {/* Active stroke being drawn */}
+                {isDrawing && currentStroke.length > 1 && (
+                  <path
+                    d={currentStroke.reduce((acc, pt, idx) => `${acc} ${idx === 0 ? 'M' : 'L'} ${pt.x} ${pt.y}`, '')}
+                    stroke="#e8003d"
+                    strokeWidth={4}
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                )}
+              </svg>
+
+              {/* User Added Interactive Layers */}
+              {currentPageLayers.filter(l => l.type !== 'draw').map((layer) => {
+                const isSelected = selectedLayerId === layer.id;
+
+                return (
+                  <div
+                    key={layer.id}
+                    className={`editor-layer-box ${isSelected ? 'selected' : ''}`}
+                    style={{
+                      left: `${layer.x}px`,
+                      top: `${layer.y}px`,
+                      width: `${layer.width || 150}px`,
+                      height: `${layer.height || 50}px`,
+                    }}
+                    onMouseDown={(e) => handleLayerMouseDown(e, layer)}
+                  >
+                    {/* TEXT LAYER */}
+                    {layer.type === 'text' && (
+                      <textarea
+                        className="editor-layer-textarea"
+                        value={layer.text}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, text: val } : l));
+                        }}
+                        style={{
+                          fontSize: `${layer.fontSize || 32}px`,
+                          fontFamily: layer.fontFamily || 'Arial',
+                          fontWeight: layer.isBold ? 'bold' : 'normal',
+                          fontStyle: layer.isItalic ? 'italic' : 'normal',
+                          color: layer.color || '#000000',
+                          backgroundColor: layer.bgColor || 'transparent',
+                          textAlign: layer.align || 'left',
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    )}
+
+                    {/* IMAGE LAYER */}
+                    {layer.type === 'image' && (
+                      <img
+                        src={layer.imageDataUrl}
+                        alt="Capa de imagen"
+                        className="editor-layer-img"
+                        draggable={false}
+                      />
+                    )}
+
+                    {/* SHAPE LAYER */}
+                    {layer.type === 'shape' && (
+                      <div
+                        className="editor-layer-shape"
+                        style={{
+                          borderColor: layer.color || '#e8003d',
+                          backgroundColor: layer.bgColor || 'transparent',
+                        }}
+                      />
+                    )}
+
+                    {/* 8 Blue Control Handles for Resizing */}
+                    {isSelected && (
+                      <div className="editor-resize-handles">
+                        <div className="handle handle-nw" onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 'nw')} />
+                        <div className="handle handle-n"  onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 'n')} />
+                        <div className="handle handle-ne" onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 'ne')} />
+                        <div className="handle handle-e"  onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 'e')} />
+                        <div className="handle handle-se" onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 'se')} />
+                        <div className="handle handle-s"  onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 's')} />
+                        <div className="handle handle-sw" onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 'sw')} />
+                        <div className="handle handle-w"  onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 'w')} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
-          {/* Floating Bottom Page Controls */}
+          {/* Floating Bottom Navigation Overlay */}
           <div className="editor-bottom-controls">
             <button
               onClick={() => setActivePage(prev => Math.max(1, prev - 1))}
@@ -486,7 +725,7 @@ export default function PDFEditor({ file, onReset }) {
             <button onClick={() => setZoom(prev => Math.max(40, prev - 10))} title="Alejar">
               <Minus size={14} />
             </button>
-            <button onClick={() => setZoom(prev => Math.min(150, prev + 10))} title="Acercar">
+            <button onClick={() => setZoom(prev => Math.min(200, prev + 10))} title="Acercar">
               <Plus size={14} />
             </button>
             <span className="editor-zoom-indicator">{zoom}%</span>
@@ -517,7 +756,7 @@ export default function PDFEditor({ file, onReset }) {
           <div className="editor-layers-list">
             {currentPageLayers.length === 0 ? (
               <div className="editor-layers-empty">
-                Haz clic en el botón <strong>A|</strong> superior para añadir tu primer texto a la página.
+                Haz clic en el botón <strong>A|</strong> o en <strong>🖼️</strong> superior para añadir capas.
               </div>
             ) : (
               currentPageLayers.map((layer) => {
@@ -531,29 +770,27 @@ export default function PDFEditor({ file, onReset }) {
                   >
                     <div className="editor-layer-item-left">
                       <Move size={14} className="editor-layer-drag-handle" />
-                      <div className="editor-layer-icon">A</div>
+                      <div className="editor-layer-icon">
+                        {layer.type === 'text' && 'A'}
+                        {layer.type === 'image' && '🖼️'}
+                        {layer.type === 'shape' && '⬜'}
+                        {layer.type === 'draw' && '✏️'}
+                      </div>
                       <input
                         type="text"
                         className="editor-layer-title-input"
-                        value={layer.text}
+                        value={layer.type === 'text' ? layer.text : `${layer.type.toUpperCase()} Elemento`}
                         onChange={(e) => {
-                          const val = e.target.value;
-                          setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, text: val } : l));
+                          if (layer.type === 'text') {
+                            const val = e.target.value;
+                            setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, text: val } : l));
+                          }
                         }}
                         onClick={(e) => e.stopPropagation()}
                       />
                     </div>
 
                     <div className="editor-layer-item-actions">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedLayerId(layer.id);
-                        }}
-                        title="Editar elemento"
-                      >
-                        <Edit2 size={14} />
-                      </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
