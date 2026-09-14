@@ -10,10 +10,10 @@ export default function PDFEditor({ file, onReset }) {
   const [loading, setLoading] = useState(true);
   const [pagesData, setPagesData] = useState([]);
   const [activePage, setActivePage] = useState(1);
-  const [zoom, setZoom] = useState(85); // 85% default zoom
-  const [toolMode, setToolMode] = useState('edit'); // 'annotate' or 'edit'
+  const [zoom, setZoom] = useState(85);
+  const [toolMode, setToolMode] = useState('edit');
 
-  // Layers state
+  // Layers state (starts clean, empty by default)
   const [layers, setLayers] = useState([]);
   const [selectedLayerId, setSelectedLayerId] = useState(null);
 
@@ -27,7 +27,7 @@ export default function PDFEditor({ file, onReset }) {
   const [exporting, setExporting] = useState(false);
   const canvasRef = useRef(null);
 
-  // Extract PDF structure on mount
+  // Load PDF pages on mount
   useEffect(() => {
     let isMounted = true;
     async function loadPdf() {
@@ -36,18 +36,7 @@ export default function PDFEditor({ file, onReset }) {
         const pages = await extractPdfPages(file);
         if (isMounted) {
           setPagesData(pages);
-          // Pre-populate layers from page 1 extracted text items
-          const initialLayers = [];
-          pages.forEach(p => {
-            p.extractedItems.forEach(item => {
-              initialLayers.push({
-                ...item,
-                initialX: item.x,
-                initialY: item.y,
-              });
-            });
-          });
-          setLayers(initialLayers);
+          setLayers([]); // Start clean without overlapping text
           setLoading(false);
         }
       } catch (err) {
@@ -59,14 +48,13 @@ export default function PDFEditor({ file, onReset }) {
     return () => { isMounted = false; };
   }, [file]);
 
-  // Selected layer reference
   const selectedLayer = layers.find(l => l.id === selectedLayerId);
 
-  // Add new text layer (like "Tu texto aquí 3" in screenshot)
+  // Add new text layer (like "Tu texto aquí 1" in screenshot)
   const handleAddTextLayer = () => {
     const pageLayers = layers.filter(l => l.pageNum === activePage);
     const count = pageLayers.length + 1;
-    const newId = `custom_${Date.now()}`;
+    const newId = `layer_${Date.now()}`;
 
     const newLayer = {
       id: newId,
@@ -74,14 +62,15 @@ export default function PDFEditor({ file, onReset }) {
       type: 'text',
       text: `Tu texto aquí ${count}`,
       x: 180,
-      y: 220 + (count * 20),
-      width: 260,
+      y: 180 + (count * 25),
+      width: 280,
       height: 60,
       fontSize: 32,
       fontFamily: 'Arial',
       isBold: true,
       isItalic: false,
       color: '#000000',
+      bgColor: 'transparent', // Can be '#ffffff' to cover original text
       align: 'left',
     };
 
@@ -106,7 +95,8 @@ export default function PDFEditor({ file, onReset }) {
 
   // Delete all layers for current page
   const handleDeleteAllPageLayers = () => {
-    if (!window.confirm('¿Eliminar todos los elementos de la página actual?')) return;
+    if (layers.filter(l => l.pageNum === activePage).length === 0) return;
+    if (!window.confirm('¿Eliminar todos los elementos añadidos en la página actual?')) return;
     setLayers(prev => prev.filter(l => l.pageNum !== activePage));
     setSelectedLayerId(null);
   };
@@ -117,18 +107,16 @@ export default function PDFEditor({ file, onReset }) {
     setSelectedLayerId(layer.id);
 
     if (handleType) {
-      // Handle resizing
       setIsResizing(true);
       setResizeHandle(handleType);
       setResizeStart({
         x: e.clientX,
         y: e.clientY,
-        width: layer.width,
-        height: layer.height,
-        fontSize: layer.fontSize,
+        width: layer.width || 200,
+        height: layer.height || 50,
+        fontSize: layer.fontSize || 16,
       });
     } else {
-      // Handle dragging
       setIsDragging(true);
       const bounds = e.currentTarget.getBoundingClientRect();
       setDragOffset({
@@ -159,10 +147,9 @@ export default function PDFEditor({ file, onReset }) {
         let newHeight = resizeStart.height;
         let newFontSize = resizeStart.fontSize;
 
-        if (resizeHandle.includes('r')) newWidth = Math.max(50, resizeStart.width + dx);
-        if (resizeHandle.includes('b')) newHeight = Math.max(25, resizeStart.height + dy);
+        if (resizeHandle.includes('r')) newWidth = Math.max(60, resizeStart.width + dx);
+        if (resizeHandle.includes('b')) newHeight = Math.max(30, resizeStart.height + dy);
 
-        // Adjust font size proportionately if corner handle
         if (resizeHandle === 'se' || resizeHandle === 'sw') {
           const scale = newWidth / resizeStart.width;
           newFontSize = Math.max(10, Math.min(120, Math.round(resizeStart.fontSize * scale)));
@@ -181,22 +168,7 @@ export default function PDFEditor({ file, onReset }) {
     setResizeHandle(null);
   };
 
-  // Reorder layer in list (up/down)
-  const moveLayerOrder = (index, direction) => {
-    const pageLayers = layers.filter(l => l.pageNum === activePage);
-    if ((direction === -1 && index === 0) || (direction === 1 && index === pageLayers.length - 1)) return;
-
-    const targetIndex = index + direction;
-    const newPageLayers = [...pageLayers];
-    const temp = newPageLayers[index];
-    newPageLayers[index] = newPageLayers[targetIndex];
-    newPageLayers[targetIndex] = temp;
-
-    const otherLayers = layers.filter(l => l.pageNum !== activePage);
-    setLayers([...otherLayers, ...newPageLayers]);
-  };
-
-  // Export PDF with changes
+  // Export PDF
   const handleExport = async () => {
     try {
       setExporting(true);
@@ -213,8 +185,8 @@ export default function PDFEditor({ file, onReset }) {
     return (
       <div className="pdf-editor-loading">
         <Loader2 size={44} className="spinner" />
-        <h2>Cargando documento en el editor...</h2>
-        <p>Preparando vista previa y capas editables...</p>
+        <h2>Cargando documento PDF...</h2>
+        <p>Generando vista previa nítida y limpia...</p>
       </div>
     );
   }
@@ -229,7 +201,7 @@ export default function PDFEditor({ file, onReset }) {
       onMouseUp={handleMouseUp}
       id="pdf-editor-container"
     >
-      {/* 1. TOP FORMATTING TOOLBAR (Exact match to screenshot top bar) */}
+      {/* 1. TOP FORMATTING TOOLBAR */}
       <div className="editor-top-bar">
         <div className="editor-top-bar__formatting">
           {/* Font Family */}
@@ -280,14 +252,6 @@ export default function PDFEditor({ file, onReset }) {
           >
             <Italic size={16} />
           </button>
-          <button
-            className={`editor-icon-btn ${selectedLayer?.isUnderline ? 'active' : ''}`}
-            onClick={() => updateSelectedLayer('isUnderline', !selectedLayer?.isUnderline)}
-            disabled={!selectedLayer}
-            title="Subrayado"
-          >
-            <Underline size={16} />
-          </button>
 
           {/* Text Color Picker */}
           <div className="editor-color-btn-wrapper" title="Color de texto">
@@ -300,6 +264,16 @@ export default function PDFEditor({ file, onReset }) {
               disabled={!selectedLayer}
             />
           </div>
+
+          {/* Cover background box toggle (White box to replace existing PDF text) */}
+          <button
+            className={`editor-icon-btn ${selectedLayer?.bgColor === '#ffffff' ? 'active' : ''}`}
+            onClick={() => updateSelectedLayer('bgColor', selectedLayer?.bgColor === '#ffffff' ? 'transparent' : '#ffffff')}
+            disabled={!selectedLayer}
+            title="Fondo Blanco (Tapar texto original)"
+          >
+            <Square size={16} style={{ fill: selectedLayer?.bgColor === '#ffffff' ? '#ffffff' : 'transparent' }} />
+          </button>
 
           <div className="editor-divider" />
 
@@ -328,14 +302,13 @@ export default function PDFEditor({ file, onReset }) {
 
           <div className="editor-divider" />
 
-          {/* Opacity / Zoom pill */}
           <div className="editor-pill-badge">
             {zoom}%
           </div>
 
           <div className="editor-divider" />
 
-          {/* Trash button for selected layer */}
+          {/* Trash button */}
           <button
             className="editor-icon-btn editor-trash-btn"
             onClick={handleDeleteSelectedLayer}
@@ -347,7 +320,7 @@ export default function PDFEditor({ file, onReset }) {
         </div>
       </div>
 
-      {/* 2. SECONDARY TOOL STRIP (Anotar | Editar pill + add text / add image / draw icons) */}
+      {/* 2. SECONDARY TOOL STRIP */}
       <div className="editor-tool-strip">
         <div className="editor-mode-pill">
           <button
@@ -369,11 +342,11 @@ export default function PDFEditor({ file, onReset }) {
 
         <div className="editor-divider-vertical" />
 
-        {/* Action icons */}
         <button className="editor-tool-btn" title="Mover / Seleccionar">
           <Hand size={18} />
         </button>
 
+        {/* Big Add Text Button */}
         <button
           className="editor-tool-btn editor-tool-btn--highlight"
           onClick={handleAddTextLayer}
@@ -382,7 +355,7 @@ export default function PDFEditor({ file, onReset }) {
           <span className="editor-text-add-icon">A|</span>
         </button>
 
-        <button className="editor-tool-btn" title="Añadir Imagen" onClick={() => alert('Para añadir imágenes, usa añadir texto')}>
+        <button className="editor-tool-btn" title="Añadir Imagen" onClick={handleAddTextLayer}>
           <ImageIcon size={18} />
         </button>
 
@@ -395,7 +368,7 @@ export default function PDFEditor({ file, onReset }) {
         </button>
       </div>
 
-      {/* 3. MAIN WORKSPACE (3 columns: Left Thumbnails, Center Canvas, Right Sidebar) */}
+      {/* 3. MAIN WORKSPACE */}
       <div className="editor-main-workspace">
         {/* Left Thumbnails */}
         <aside className="editor-left-thumbs">
@@ -428,14 +401,14 @@ export default function PDFEditor({ file, onReset }) {
               transformOrigin: 'top center',
             }}
           >
-            {/* Background PDF Page Image */}
+            {/* CLEAN PDF Page Background Image */}
             <img
               src={currentPageData?.bgImageUrl}
               alt={`Página ${currentPageData?.pageNum}`}
               className="editor-bg-image"
             />
 
-            {/* Draggable & Resizable Layers for Current Page */}
+            {/* User Added Interactive Layers */}
             {currentPageLayers.map((layer) => {
               const isSelected = selectedLayerId === layer.id;
 
@@ -452,13 +425,12 @@ export default function PDFEditor({ file, onReset }) {
                     fontFamily: layer.fontFamily || 'Arial',
                     fontWeight: layer.isBold ? 'bold' : 'normal',
                     fontStyle: layer.isItalic ? 'italic' : 'normal',
-                    textDecoration: layer.isUnderline ? 'underline' : 'none',
                     color: layer.color || '#000000',
+                    backgroundColor: layer.bgColor || 'transparent',
                     textAlign: layer.align || 'left',
                   }}
                   onMouseDown={(e) => handleMouseDown(e, layer)}
                 >
-                  {/* Inline editable text input/textarea */}
                   <textarea
                     className="editor-layer-textarea"
                     value={layer.text}
@@ -477,7 +449,7 @@ export default function PDFEditor({ file, onReset }) {
                     onClick={(e) => e.stopPropagation()}
                   />
 
-                  {/* 8 Blue Resize Handles (Matching Screenshot exact blue square handles) */}
+                  {/* 8 Blue Resize Handles */}
                   {isSelected && (
                     <div className="editor-resize-handles">
                       <div className="handle handle-nw" onMouseDown={(e) => handleMouseDown(e, layer, 'nw')} />
@@ -495,7 +467,7 @@ export default function PDFEditor({ file, onReset }) {
             })}
           </div>
 
-          {/* Floating Bottom Page Controls Overlay (Matching Screenshot bottom bar) */}
+          {/* Floating Bottom Page Controls */}
           <div className="editor-bottom-controls">
             <button
               onClick={() => setActivePage(prev => Math.max(1, prev - 1))}
@@ -521,13 +493,12 @@ export default function PDFEditor({ file, onReset }) {
           </div>
         </main>
 
-        {/* Right Sidebar ("Editar PDF" - Exact match to screenshot right panel) */}
+        {/* Right Sidebar ("Editar PDF") */}
         <aside className="editor-right-sidebar">
           <div className="editor-sidebar-header">
             <h2>Editar PDF</h2>
           </div>
 
-          {/* Info Banner */}
           <div className="editor-info-banner">
             <Info size={20} className="editor-info-icon" />
             <p>Reordena los elementos y muévelos delante o detrás del documento.</p>
@@ -535,19 +506,21 @@ export default function PDFEditor({ file, onReset }) {
 
           <div className="editor-layer-section-header">
             <span className="editor-page-label">Página {activePage}</span>
-            <button className="editor-clear-all-btn" onClick={handleDeleteAllPageLayers}>
-              Eliminar todos
-            </button>
+            {currentPageLayers.length > 0 && (
+              <button className="editor-clear-all-btn" onClick={handleDeleteAllPageLayers}>
+                Eliminar todos
+              </button>
+            )}
           </div>
 
           {/* Layer List */}
           <div className="editor-layers-list">
             {currentPageLayers.length === 0 ? (
               <div className="editor-layers-empty">
-                No hay elementos en esta página. Haz clic en "A|" para añadir un texto.
+                Haz clic en el botón <strong>A|</strong> superior para añadir tu primer texto a la página.
               </div>
             ) : (
-              currentPageLayers.map((layer, idx) => {
+              currentPageLayers.map((layer) => {
                 const isSelected = selectedLayerId === layer.id;
 
                 return (
@@ -598,7 +571,7 @@ export default function PDFEditor({ file, onReset }) {
             )}
           </div>
 
-          {/* Bottom Guardar Cambios Button (Matching screenshot big red button) */}
+          {/* Bottom Guardar Cambios Button */}
           <div className="editor-sidebar-footer">
             <button
               onClick={handleExport}
