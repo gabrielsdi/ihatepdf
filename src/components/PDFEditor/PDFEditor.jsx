@@ -28,7 +28,7 @@ export default function PDFEditor({ file, onReset }) {
   const [isResizing, setIsResizing] = useState(false);
   const [resizeHandle, setResizeHandle] = useState(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  const [resizeStart, setResizeStart] = useState({ x: 0, y: 0, width: 0, height: 0, fontSize: 16 });
+  const [resizeStart, setResizeStart] = useState({ x: 0, y: 0, width: 0, height: 0 });
 
   // Pan / Hand tool state
   const [isPanning, setIsPanning] = useState(false);
@@ -127,7 +127,7 @@ export default function PDFEditor({ file, onReset }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedLayer, handleCopySelectedLayer, handlePasteLayer]);
 
-  // 1. ADD TEXT LAYER
+  // 1. ADD TEXT LAYER (Default 36px font size, NOT bold)
   const handleAddTextLayer = () => {
     const pageLayers = layers.filter(l => l.pageNum === activePage);
     const count = pageLayers.length + 1;
@@ -140,11 +140,11 @@ export default function PDFEditor({ file, onReset }) {
       text: `Tu texto aquí ${count}`,
       x: 100,
       y: 100 + (count * 30),
-      width: 340,
-      height: 70,
-      fontSize: 36,
+      width: 320,
+      height: 60,
+      fontSize: 36, // 36px default font size
       fontFamily: 'Arial',
-      isBold: true,
+      isBold: false, // NOT bold by default
       isItalic: false,
       color: '#000000',
       bgColor: 'transparent',
@@ -238,7 +238,7 @@ export default function PDFEditor({ file, onReset }) {
   // MOUSE DRAGGING & RESIZING HANDLERS
   // --------------------------------------------------------------------------
   const handleLayerMouseDown = (e, layer) => {
-    e.stopPropagation(); // Prevents canvas click-outside handler from deselecting!
+    e.stopPropagation();
 
     if (editingLayerId === layer.id) return;
     if (toolMode === 'hand' || toolMode === 'draw') return;
@@ -277,11 +277,9 @@ export default function PDFEditor({ file, onReset }) {
       y: e.clientY,
       width: layer.width || 150,
       height: layer.height || 50,
-      fontSize: layer.fontSize || 16,
     });
   };
 
-  // Canvas Mouse Down (Deselect ONLY when clicking blank canvas background)
   const handleCanvasMouseDown = (e) => {
     if (toolMode === 'hand') {
       setIsPanning(true);
@@ -306,7 +304,6 @@ export default function PDFEditor({ file, onReset }) {
       return;
     }
 
-    // ONLY DESELECT WHEN CLICKING ON BLANK CANVAS / BACKGROUND AREA
     if (e.target.classList.contains('editor-canvas-workspace') || e.target.classList.contains('editor-bg-image') || e.target.classList.contains('editor-page-container') || e.target.classList.contains('editor-page-scaler')) {
       setSelectedLayerId(null);
       setEditingLayerId(null);
@@ -354,7 +351,6 @@ export default function PDFEditor({ file, onReset }) {
 
       let newWidth = resizeStart.width;
       let newHeight = resizeStart.height;
-      let newFontSize = resizeStart.fontSize;
 
       if (resizeHandle.includes('e')) newWidth = Math.max(40, resizeStart.width + dx);
       if (resizeHandle.includes('s')) newHeight = Math.max(20, resizeStart.height + dy);
@@ -367,17 +363,12 @@ export default function PDFEditor({ file, onReset }) {
         if (potentialH > 20) newHeight = potentialH;
       }
 
-      if (['se', 'sw', 'ne', 'nw'].includes(resizeHandle)) {
-        const scaleFactor = newWidth / resizeStart.width;
-        newFontSize = Math.max(10, Math.min(120, Math.round(resizeStart.fontSize * scaleFactor)));
-      }
-
+      // ONLY CONTROL BOUNDING BOX SIZE — DO NOT ALTER FONT SIZE!
       setLayers(prev =>
         prev.map(l => l.id === selectedLayer.id ? {
           ...l,
           width: newWidth,
-          height: newHeight,
-          fontSize: newFontSize
+          height: newHeight
         } : l)
       );
     }
@@ -732,7 +723,7 @@ export default function PDFEditor({ file, onReset }) {
                           setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, text: val } : l));
                         }}
                         style={{
-                          fontSize: `${layer.fontSize || 32}px`,
+                          fontSize: `${layer.fontSize || 36}px`,
                           fontFamily: layer.fontFamily || 'Arial',
                           fontWeight: layer.isBold ? 'bold' : 'normal',
                           fontStyle: layer.isItalic ? 'italic' : 'normal',

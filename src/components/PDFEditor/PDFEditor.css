@@ -311,7 +311,7 @@
   color: #6b7280;
 }
 
-/* Center Canvas Workspace (Fills 100% Space like image 2) */
+/* Center Canvas Workspace */
 .editor-canvas-workspace {
   flex: 1;
   background-color: #e9ecef;
@@ -319,7 +319,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 8px 16px 36px; /* Reduced top padding so page touches top edge */
+  padding: 8px 16px 36px;
   position: relative;
 }
 
@@ -404,6 +404,9 @@
   padding: 2px 4px;
   margin: 0;
   box-sizing: border-box;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .editor-layer-textarea.readonly-input {
@@ -451,7 +454,7 @@
 .handle-sw { bottom: -5px; left: -5px; cursor: nesw-resize; }
 .handle-w  { top: calc(50% - 5px); left: -5px; cursor: ew-resize; }
 
-/* Floating Bottom Navigation Overlay (Exact match to iLovePDF image 2) */
+/* Floating Bottom Navigation Overlay */
 .editor-bottom-controls {
   position: sticky;
   bottom: 12px;
