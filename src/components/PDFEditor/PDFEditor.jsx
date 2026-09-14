@@ -54,7 +54,7 @@ export default function PDFEditor({ file, onReset }) {
         if (isMounted) {
           setPagesData(pages);
           setLayers([]);
-          setZoom(200); // 200% internal scale (displayed as 100%)
+          setZoom(200);
           setLoading(false);
         }
       } catch (err) {
@@ -66,10 +66,13 @@ export default function PDFEditor({ file, onReset }) {
     return () => { isMounted = false; };
   }, [file]);
 
-  // Focus textarea when entering edit mode
+  // Focus textarea when entering edit mode & auto-adjust height/width
   useEffect(() => {
     if (editingLayerId && textareaRef.current) {
       textareaRef.current.focus();
+      // Auto-adjust height to scrollHeight
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
     }
   }, [editingLayerId]);
 
@@ -127,7 +130,7 @@ export default function PDFEditor({ file, onReset }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedLayer, handleCopySelectedLayer, handlePasteLayer]);
 
-  // 1. ADD TEXT LAYER (Default 36px font size, NOT bold)
+  // 1. ADD TEXT LAYER (Auto-adjusting width & height, 36px font, non-bold)
   const handleAddTextLayer = () => {
     const pageLayers = layers.filter(l => l.pageNum === activePage);
     const count = pageLayers.length + 1;
@@ -140,11 +143,11 @@ export default function PDFEditor({ file, onReset }) {
       text: `Tu texto aquí ${count}`,
       x: 100,
       y: 100 + (count * 30),
-      width: 320,
-      height: 60,
-      fontSize: 36, // 36px default font size
+      width: null, // null means AUTO-FIT width to text content!
+      height: null, // null means AUTO-FIT height to text content!
+      fontSize: 36,
       fontFamily: 'Arial',
-      isBold: false, // NOT bold by default
+      isBold: false,
       isItalic: false,
       color: '#000000',
       bgColor: 'transparent',
@@ -272,11 +275,14 @@ export default function PDFEditor({ file, onReset }) {
     setIsResizing(true);
     setResizeHandle(handleType);
 
+    const bounds = e.currentTarget.parentElement.parentElement.getBoundingClientRect();
+    const scale = zoom / 100;
+
     setResizeStart({
       x: e.clientX,
       y: e.clientY,
-      width: layer.width || 150,
-      height: layer.height || 50,
+      width: layer.width || (bounds.width / scale),
+      height: layer.height || (bounds.height / scale),
     });
   };
 
@@ -363,7 +369,6 @@ export default function PDFEditor({ file, onReset }) {
         if (potentialH > 20) newHeight = potentialH;
       }
 
-      // ONLY CONTROL BOUNDING BOX SIZE — DO NOT ALTER FONT SIZE!
       setLayers(prev =>
         prev.map(l => l.id === selectedLayer.id ? {
           ...l,
@@ -423,7 +428,6 @@ export default function PDFEditor({ file, onReset }) {
   const currentPageData = pagesData.find(p => p.pageNum === activePage) || pagesData[0];
   const currentPageLayers = layers.filter(l => l.pageNum === activePage);
 
-  // Display zoom label (Internal scale 200% is shown as "100%")
   const displayZoomPercent = Math.round(zoom / 2);
 
   return (
@@ -704,8 +708,10 @@ export default function PDFEditor({ file, onReset }) {
                     style={{
                       left: `${layer.x}px`,
                       top: `${layer.y}px`,
-                      width: `${layer.width || 150}px`,
-                      height: `${layer.height || 50}px`,
+                      width: layer.width ? `${layer.width}px` : 'fit-content',
+                      height: layer.height ? `${layer.height}px` : 'auto',
+                      minWidth: '60px',
+                      minHeight: '36px',
                     }}
                     onMouseDown={(e) => handleLayerMouseDown(e, layer)}
                     onDoubleClick={(e) => handleLayerDoubleClick(e, layer)}
@@ -721,6 +727,10 @@ export default function PDFEditor({ file, onReset }) {
                         onChange={(e) => {
                           const val = e.target.value;
                           setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, text: val } : l));
+                          if (textareaRef.current) {
+                            textareaRef.current.style.height = 'auto';
+                            textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+                          }
                         }}
                         style={{
                           fontSize: `${layer.fontSize || 36}px`,
