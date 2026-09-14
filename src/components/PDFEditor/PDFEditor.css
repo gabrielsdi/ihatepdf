@@ -254,6 +254,68 @@
   color: var(--color-primary);
 }
 
+/* Tool strip vertical divider */
+.editor-tool-divider {
+  width: 1px;
+  height: 22px;
+  background-color: #e5e7eb;
+  flex-shrink: 0;
+}
+
+/* Line width control (brush size slider) */
+.editor-linewidth-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.editor-linewidth-label {
+  font-size: 0.65rem;
+  color: #374151;
+  line-height: 1;
+}
+
+.editor-linewidth-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 90px;
+  height: 4px;
+  border-radius: 4px;
+  background: #d1d5db;
+  outline: none;
+  cursor: pointer;
+}
+
+.editor-linewidth-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #2563eb;
+  cursor: pointer;
+  border: 2px solid #ffffff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.editor-linewidth-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #2563eb;
+  cursor: pointer;
+  border: 2px solid #ffffff;
+}
+
+.editor-linewidth-value {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #4b5563;
+  min-width: 28px;
+  text-align: right;
+}
+
 /* 3. MAIN WORKSPACE */
 .editor-main-workspace {
   display: flex;
@@ -374,6 +436,7 @@
   display: flex;
   align-items: flex-start;
   z-index: 10;
+  overflow: visible;
 }
 
 .editor-layer-box:hover {

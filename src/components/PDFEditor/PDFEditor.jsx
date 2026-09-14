@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import {
-  Type, Image as ImageIcon, Edit2, Square, Hand, Bold, Italic,
-  Trash2, Move, ChevronUp, ChevronDown, Plus, Minus, Info, ArrowRight, Loader2, AlignLeft, AlignCenter, AlignRight, Copy
+  Image as ImageIcon, Edit2, Square, Hand, Bold, Italic,
+  Trash2, Move, ChevronUp, ChevronDown, Plus, Minus, Info, ArrowRight, Loader2, AlignLeft, AlignCenter, AlignRight, Copy, MousePointer2
 } from 'lucide-react';
 import { extractPdfPages, exportPdfWithLayers } from '../../utils/pdfUtils';
 import './PDFEditor.css';
@@ -39,6 +39,11 @@ export default function PDFEditor({ file, onReset }) {
   // Freehand Draw state
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentStroke, setCurrentStroke] = useState([]);
+  const [drawLineWidth, setDrawLineWidth] = useState(3);
+
+  // Undo history
+  const historyRef = useRef([]);
+  const isUndoingRef = useRef(false);
 
   const [exporting, setExporting] = useState(false);
   const workspaceRef = useRef(null);
@@ -47,6 +52,19 @@ export default function PDFEditor({ file, onReset }) {
   const textareaRef = useRef(null);
   // Map of layerId -> textarea DOM node, for measuring scrollHeight after resize
   const layerTextareaRefs = useRef({});
+
+  // Helper to safely clear native browser text selection highlight & blur active inputs
+  const clearTextSelection = useCallback(() => {
+    if (window.getSelection) {
+      const sel = window.getSelection();
+      if (sel && sel.removeAllRanges) {
+        sel.removeAllRanges();
+      }
+    }
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+      document.activeElement.blur();
+    }
+  }, []);
 
   // Load PDF pages on mount
   useEffect(() => {
@@ -74,13 +92,50 @@ export default function PDFEditor({ file, onReset }) {
   useEffect(() => {
     if (editingLayerId && textareaRef.current) {
       textareaRef.current.focus();
-      // Auto-adjust height to scrollHeight
       textareaRef.current.style.height = 'auto';
       textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    } else if (!editingLayerId) {
+      clearTextSelection();
     }
-  }, [editingLayerId]);
+  }, [editingLayerId, clearTextSelection]);
+
+  // Automatically sync text layer heights with actual scrollHeight of textarea content
+  useLayoutEffect(() => {
+    layers.forEach(layer => {
+      if (layer.type === 'text') {
+        const taEl = layerTextareaRefs.current[layer.id];
+        if (taEl) {
+          taEl.style.height = 'auto';
+          const measuredH = taEl.scrollHeight;
+          taEl.style.height = `${measuredH}px`;
+          if (measuredH && measuredH !== layer.height) {
+            setLayers(prev =>
+              prev.map(l => l.id === layer.id ? { ...l, height: measuredH } : l)
+            );
+          }
+        }
+      }
+    });
+  }, [layers, zoom, activePage]);
 
   const selectedLayer = layers.find(l => l.id === selectedLayerId);
+
+  // --------------------------------------------------------------------------
+  // UNDO HISTORY
+  // --------------------------------------------------------------------------
+  const pushHistory = useCallback((prevLayers) => {
+    if (isUndoingRef.current) return;
+    historyRef.current = [...historyRef.current.slice(-49), prevLayers];
+  }, []);
+
+  // Track layers changes and push to history (skip initial empty state and undo ops)
+  const prevLayersRef = useRef(layers);
+  useEffect(() => {
+    if (!isUndoingRef.current && prevLayersRef.current !== layers) {
+      pushHistory(prevLayersRef.current);
+    }
+    prevLayersRef.current = layers;
+  }, [layers, pushHistory]);
 
   // --------------------------------------------------------------------------
   // COPY & PASTE SHORTCUTS
@@ -113,33 +168,66 @@ export default function PDFEditor({ file, onReset }) {
     const handleKeyDown = (e) => {
       const isCmdOrCtrl = e.metaKey || e.ctrlKey;
       const activeTag = document.activeElement?.tagName?.toLowerCase();
+      const isInInput = activeTag === 'textarea' || activeTag === 'input';
 
-      if (isCmdOrCtrl && e.key.toLowerCase() === 'c') {
-        if (selectedLayer && activeTag !== 'textarea' && activeTag !== 'input') {
+      if (isCmdOrCtrl && e.key.toLowerCase() === 'z') {
+        if (!isInInput || activeTag !== 'textarea') {
+          e.preventDefault();
+          if (historyRef.current.length > 0) {
+            const prevState = historyRef.current[historyRef.current.length - 1];
+            historyRef.current = historyRef.current.slice(0, -1);
+            isUndoingRef.current = true;
+            setLayers(prevState);
+            // Reset undoing flag after state settles
+            setTimeout(() => { isUndoingRef.current = false; }, 50);
+          }
+        }
+      } else if (isCmdOrCtrl && e.key.toLowerCase() === 'c') {
+        if (selectedLayer && !isInInput) {
           e.preventDefault();
           handleCopySelectedLayer();
         }
       } else if (isCmdOrCtrl && e.key.toLowerCase() === 'v') {
-        if (copiedLayerRef.current && activeTag !== 'textarea' && activeTag !== 'input') {
+        if (copiedLayerRef.current && !isInInput) {
           e.preventDefault();
           handlePasteLayer();
         }
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedLayerId) {
-        if (activeTag !== 'textarea' && activeTag !== 'input' && !editingLayerId) {
+        if (!isInInput && !editingLayerId) {
           e.preventDefault();
           handleDeleteSelectedLayer();
         }
       } else if (e.key === 'Escape') {
+        clearTextSelection();
         setSelectedLayerId(null);
         setEditingLayerId(null);
+      } else if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        if (selectedLayerId && !editingLayerId && !isInInput) {
+          e.preventDefault();
+          const step = e.shiftKey ? 10 : 1;
+          setLayers(prev => prev.map(l => {
+            if (l.id !== selectedLayerId) return l;
+            let { x, y } = l;
+            let dx = 0, dy = 0;
+            if (e.key === 'ArrowUp')    { dy = -step; y = Math.max(0, y - step); }
+            if (e.key === 'ArrowDown')  { dy = step;  y = y + step; }
+            if (e.key === 'ArrowLeft')  { dx = -step; x = Math.max(0, x - step); }
+            if (e.key === 'ArrowRight') { dx = step;  x = x + step; }
+            // For draw layers, also translate all path points
+            if (l.type === 'draw' && l.points) {
+              return { ...l, x, y, points: l.points.map(pt => ({ x: pt.x + dx, y: pt.y + dy })) };
+            }
+            return { ...l, x, y };
+          }));
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedLayer, selectedLayerId, editingLayerId, handleCopySelectedLayer, handlePasteLayer]);
+  }, [selectedLayer, selectedLayerId, editingLayerId, handleCopySelectedLayer, handlePasteLayer, clearTextSelection]);
 
-  // 1. ADD TEXT LAYER (Auto-adjusting width & height, 36px font, non-bold)
+  // 1. ADD TEXT LAYER (Photoshop-style defined text box width, non-bold)
   const handleAddTextLayer = () => {
     const pageLayers = layers.filter(l => l.pageNum === activePage);
     const count = pageLayers.length + 1;
@@ -152,8 +240,8 @@ export default function PDFEditor({ file, onReset }) {
       text: `Your text here ${count}`,
       x: 100,
       y: 100 + (count * 30),
-      width: null, // null means AUTO-FIT width to text content!
-      height: null, // null means AUTO-FIT height to text content!
+      width: 250, // Photoshop-style fixed box width
+      height: 40,  // Box height
       fontSize: 24,
       fontFamily: 'Arial',
       isBold: false,
@@ -211,7 +299,7 @@ export default function PDFEditor({ file, onReset }) {
       y: 140,
       width: 260,
       height: 140,
-      color: '#e8003d',
+      color: '#000000',
       bgColor: 'transparent',
     };
 
@@ -225,7 +313,22 @@ export default function PDFEditor({ file, onReset }) {
   const updateSelectedLayer = (prop, value) => {
     if (!selectedLayerId) return;
     setLayers(prev =>
-      prev.map(l => l.id === selectedLayerId ? { ...l, [prop]: value } : l)
+      prev.map(l => {
+        if (l.id !== selectedLayerId) return l;
+        const updated = { ...l, [prop]: value };
+        // Recalculate text height on font changes
+        if (updated.type === 'text') {
+          setTimeout(() => {
+            const taEl = layerTextareaRefs.current[l.id];
+            if (taEl) {
+              taEl.style.height = 'auto';
+              const newH = Math.max(24, taEl.scrollHeight);
+              setLayers(p => p.map(item => item.id === l.id ? { ...item, height: newH } : item));
+            }
+          }, 0);
+        }
+        return updated;
+      })
     );
   };
 
@@ -283,6 +386,10 @@ export default function PDFEditor({ file, onReset }) {
   const handleLayerMouseDown = (e, layer) => {
     e.stopPropagation();
 
+    if (editingLayerId && editingLayerId !== layer.id) {
+      clearTextSelection();
+      setEditingLayerId(null);
+    }
     if (editingLayerId === layer.id) return;
     if (toolMode === 'hand' || toolMode === 'draw') return;
 
@@ -310,6 +417,7 @@ export default function PDFEditor({ file, onReset }) {
   const handleResizeHandleMouseDown = (e, layer, handleType) => {
     e.stopPropagation();
     e.preventDefault();
+    clearTextSelection();
     setSelectedLayerId(layer.id);
     setEditingLayerId(null);
     setIsResizing(true);
@@ -321,68 +429,11 @@ export default function PDFEditor({ file, onReset }) {
     setResizeStart({
       x: e.clientX,
       y: e.clientY,
+      layerX: layer.x,
+      layerY: layer.y,
       width: layer.width || (bounds.width / scale),
       height: layer.height || (bounds.height / scale),
     });
-  };
-
-  // ---------------------------------------------------------------------------
-  // SNAP TEXT LAYER to tightly fit its content (used after resize + on deselect)
-  // ---------------------------------------------------------------------------
-  const snapTextLayerToContent = (layer) => {
-    if (!layer || layer.type !== 'text') return;
-    const taEl = layerTextareaRefs.current[layer.id];
-    if (!taEl) return;
-
-    const fs = layer.fontSize || 24;
-    const ff = layer.fontFamily || 'Arial';
-    const fw = layer.isBold ? 'bold' : 'normal';
-    const fi = layer.isItalic ? 'italic' : 'normal';
-    const text = layer.text || ' ';
-
-    const baseStyles = [
-      'position:fixed', 'visibility:hidden', 'pointer-events:none',
-      'top:-9999px', 'left:-9999px',
-      `font-size:${fs}px`, `font-family:${ff}`,
-      `font-weight:${fw}`, `font-style:${fi}`,
-      'line-height:1.15', 'padding:2px 4px', 'box-sizing:border-box',
-    ];
-
-    // 1. Natural (single-line) width
-    const widthProbe = document.createElement('div');
-    widthProbe.style.cssText = [...baseStyles, 'white-space:pre'].join(';');
-    const longestLine = text.split('\n').reduce((a, b) => b.length > a.length ? b : a, '');
-    widthProbe.textContent = longestLine || ' ';
-    document.body.appendChild(widthProbe);
-    const naturalWidth = Math.ceil(widthProbe.getBoundingClientRect().width) + 4;
-    document.body.removeChild(widthProbe);
-
-    // 2. Live container width in document coords (unscaled)
-    const scale = zoom / 100;
-    const containerEl = taEl.parentElement;
-    const liveWidth = containerEl
-      ? Math.round(containerEl.getBoundingClientRect().width / scale)
-      : (layer.width || naturalWidth);
-    const snappedWidth = Math.max(40, Math.min(liveWidth, naturalWidth));
-
-    // 3. Height at snappedWidth
-    const heightProbe = document.createElement('div');
-    heightProbe.style.cssText = [
-      ...baseStyles,
-      'white-space:pre-wrap', 'word-break:break-word', 'overflow-wrap:break-word',
-      `width:${snappedWidth}px`,
-    ].join(';');
-    heightProbe.textContent = text;
-    document.body.appendChild(heightProbe);
-    const snappedHeight = Math.ceil(heightProbe.getBoundingClientRect().height);
-    document.body.removeChild(heightProbe);
-
-    // 4. Commit
-    setLayers(prev =>
-      prev.map(l =>
-        l.id === layer.id ? { ...l, width: snappedWidth, height: snappedHeight } : l
-      )
-    );
   };
 
   const handleCanvasMouseDown = (e) => {
@@ -410,10 +461,7 @@ export default function PDFEditor({ file, onReset }) {
     }
 
     if (e.target.classList.contains('editor-canvas-workspace') || e.target.classList.contains('editor-bg-image') || e.target.classList.contains('editor-page-container') || e.target.classList.contains('editor-page-scaler')) {
-      // Auto-fit the text layer before deselecting
-      if (selectedLayer?.type === 'text') {
-        snapTextLayerToContent(selectedLayer);
-      }
+      clearTextSelection();
       setSelectedLayerId(null);
       setEditingLayerId(null);
     }
@@ -452,67 +500,118 @@ export default function PDFEditor({ file, onReset }) {
       const newY = Math.max(0, mouseYCanvas - dragOffset.y);
 
       setLayers(prev =>
-        prev.map(l => l.id === selectedLayer.id ? { ...l, x: newX, y: newY } : l)
+        prev.map(l => {
+          if (l.id !== selectedLayer.id) return l;
+          // For draw layers, also translate all path points by the same delta
+          if (l.type === 'draw' && l.points) {
+            const dx = newX - l.x;
+            const dy = newY - l.y;
+            return {
+              ...l,
+              x: newX,
+              y: newY,
+              points: l.points.map(pt => ({ x: pt.x + dx, y: pt.y + dy })),
+            };
+          }
+          return { ...l, x: newX, y: newY };
+        })
       );
+
     } else if (isResizing) {
       const dx = (e.clientX - resizeStart.x) / scale;
       const dy = (e.clientY - resizeStart.y) / scale;
 
+      let newX = resizeStart.layerX;
+      let newY = resizeStart.layerY;
       let newWidth = resizeStart.width;
       let newHeight = resizeStart.height;
 
-      if (resizeHandle.includes('e')) newWidth = Math.max(40, resizeStart.width + dx);
-      if (resizeHandle.includes('s')) newHeight = Math.max(20, resizeStart.height + dy);
+      if (resizeHandle.includes('e')) {
+        newWidth = Math.max(40, resizeStart.width + dx);
+      }
       if (resizeHandle.includes('w')) {
-        const potentialW = resizeStart.width - dx;
-        if (potentialW > 40) newWidth = potentialW;
+        const possibleW = resizeStart.width - dx;
+        if (possibleW >= 40) {
+          newWidth = possibleW;
+          newX = resizeStart.layerX + dx;
+        }
+      }
+      if (resizeHandle.includes('s')) {
+        newHeight = Math.max(20, resizeStart.height + dy);
       }
       if (resizeHandle.includes('n')) {
-        const potentialH = resizeStart.height - dy;
-        if (potentialH > 20) newHeight = potentialH;
+        const possibleH = resizeStart.height - dy;
+        if (possibleH >= 20) {
+          newHeight = possibleH;
+          newY = resizeStart.layerY + dy;
+        }
       }
 
       setLayers(prev =>
-        prev.map(l => l.id === selectedLayer.id ? {
-          ...l,
-          width: newWidth,
-          height: newHeight
-        } : l)
+        prev.map(l => {
+          if (l.id !== selectedLayer.id) return l;
+          if (l.type === 'text') {
+            const taEl = layerTextareaRefs.current[l.id];
+            let fitH = newHeight;
+            if (taEl) {
+              taEl.style.width = `${newWidth}px`;
+              taEl.style.height = 'auto';
+              fitH = Math.max(newHeight, taEl.scrollHeight);
+            }
+            return {
+              ...l,
+              x: newX,
+              y: newY,
+              width: newWidth,
+              height: fitH,
+            };
+          }
+          return {
+            ...l,
+            x: newX,
+            y: newY,
+            width: newWidth,
+            height: newHeight,
+          };
+        })
       );
     }
   };
 
   const handleGlobalMouseUp = () => {
-    const wasResizing = isResizing;
-    const resizingLayerId = selectedLayer?.id;
-    const resizingLayerType = selectedLayer?.type;
-    const resizingLayer = selectedLayer;
-
     setIsDragging(false);
     setIsResizing(false);
     setIsPanning(false);
     setResizeHandle(null);
 
-    // After resize ends on a text layer: snap BOTH width and height to tightly fit text
-    if (wasResizing && resizingLayerType === 'text' && resizingLayerId && resizingLayer) {
-      setTimeout(() => snapTextLayerToContent(resizingLayer), 0);
-    }
-
-
     if (isDrawing && currentStroke.length > 1) {
       setIsDrawing(false);
+      // Calculate bounding box so the layer can be positioned/dragged like other layers
+      const xs = currentStroke.map(p => p.x);
+      const ys = currentStroke.map(p => p.y);
+      const minX = Math.min(...xs);
+      const minY = Math.min(...ys);
+      const maxX = Math.max(...xs);
+      const maxY = Math.max(...ys);
+      const padding = (drawLineWidth + 2);
       const newId = `draw_${Date.now()}`;
       const newLayer = {
         id: newId,
         pageNum: activePage,
         type: 'draw',
+        // Absolute points (relative to page canvas, not bounding box)
         points: currentStroke,
-        color: '#e8003d',
-        lineWidth: 4,
+        x: minX - padding,
+        y: minY - padding,
+        width: maxX - minX + padding * 2,
+        height: maxY - minY + padding * 2,
+        color: '#000000',
+        lineWidth: drawLineWidth,
       };
       setLayers(prev => [...prev, newLayer]);
       setCurrentStroke([]);
       setToolMode('select');
+      setSelectedLayerId(newId);
     }
   };
 
@@ -686,6 +785,17 @@ export default function PDFEditor({ file, onReset }) {
 
       {/* 2. SECONDARY TOOL STRIP */}
       <div className="editor-tool-strip" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+        {/* Selection tool (Photoshop-style) */}
+        <button
+          className={`editor-tool-btn ${toolMode === 'select' ? 'active' : ''}`}
+          onClick={() => setToolMode('select')}
+          title="Select / Move (V)"
+        >
+          <MousePointer2 size={18} />
+        </button>
+
+        <div className="editor-tool-divider" />
+
         <button
           className={`editor-tool-btn ${toolMode === 'hand' ? 'active' : ''}`}
           onClick={() => setToolMode('hand')}
@@ -725,6 +835,32 @@ export default function PDFEditor({ file, onReset }) {
         >
           <Square size={18} />
         </button>
+
+        {/* Line width control — visible when draw tool is active or a draw layer is selected */}
+        {(toolMode === 'draw' || selectedLayer?.type === 'draw') && (
+          <>
+            <div className="editor-tool-divider" />
+            <div className="editor-linewidth-control" title="Brush size">
+              <span className="editor-linewidth-label">⬤</span>
+              <input
+                type="range"
+                min="1"
+                max="30"
+                step="1"
+                className="editor-linewidth-slider"
+                value={selectedLayer?.type === 'draw' ? (selectedLayer.lineWidth || drawLineWidth) : drawLineWidth}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value);
+                  setDrawLineWidth(val);
+                  if (selectedLayer?.type === 'draw') {
+                    updateSelectedLayer('lineWidth', val);
+                  }
+                }}
+              />
+              <span className="editor-linewidth-value">{selectedLayer?.type === 'draw' ? (selectedLayer.lineWidth || drawLineWidth) : drawLineWidth}px</span>
+            </div>
+          </>
+        )}
       </div>
 
       {/* 3. MAIN WORKSPACE */}
@@ -775,34 +911,22 @@ export default function PDFEditor({ file, onReset }) {
                 className="editor-bg-image"
               />
 
-              {/* Freehand Drawings SVG overlay */}
-              <svg className="editor-draw-svg">
-                {currentPageLayers.filter(l => l.type === 'draw').map(l => (
-                  <path
-                    key={l.id}
-                    d={l.points.reduce((acc, pt, idx) => `${acc} ${idx === 0 ? 'M' : 'L'} ${pt.x} ${pt.y}`, '')}
-                    stroke={l.color || '#e8003d'}
-                    strokeWidth={l.lineWidth || 4}
-                    fill="none"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                ))}
-
-                {isDrawing && currentStroke.length > 1 && (
+              {/* Live freehand stroke preview (only while drawing) */}
+              {isDrawing && currentStroke.length > 1 && (
+                <svg className="editor-draw-svg" style={{ pointerEvents: 'none' }}>
                   <path
                     d={currentStroke.reduce((acc, pt, idx) => `${acc} ${idx === 0 ? 'M' : 'L'} ${pt.x} ${pt.y}`, '')}
-                    stroke="#e8003d"
-                    strokeWidth={4}
+                    stroke="#000000"
+                    strokeWidth={drawLineWidth}
                     fill="none"
                     strokeLinecap="round"
                     strokeLinejoin="round"
                   />
-                )}
-              </svg>
+                </svg>
+              )}
 
-              {/* User Added Interactive Layers */}
-              {currentPageLayers.filter(l => l.type !== 'draw').map((layer) => {
+              {/* User Added Interactive Layers (text, image, shape, draw) */}
+              {currentPageLayers.map((layer) => {
                 const isSelected = selectedLayerId === layer.id;
                 const isEditing = editingLayerId === layer.id;
 
@@ -813,12 +937,10 @@ export default function PDFEditor({ file, onReset }) {
                     style={{
                       left: `${layer.x}px`,
                       top: `${layer.y}px`,
-                      width: layer.width ? `${layer.width}px` : 'fit-content',
-                      // Text layers: height is auto (driven by textarea scrollHeight)
-                      // Image/shape layers: use fixed layer.height
-                      height: layer.type === 'text' ? 'auto' : (layer.height ? `${layer.height}px` : 'auto'),
-                      minWidth: '60px',
-                      minHeight: layer.type === 'text' ? 'unset' : '36px',
+                      width: `${layer.width || 250}px`,
+                      height: layer.type === 'text' ? 'auto' : `${layer.height || 40}px`,
+                      minWidth: '40px',
+                      minHeight: layer.type === 'text' ? 'auto' : '36px',
                     }}
                     onMouseDown={(e) => handleLayerMouseDown(e, layer)}
                     onDoubleClick={(e) => handleLayerDoubleClick(e, layer)}
@@ -828,10 +950,8 @@ export default function PDFEditor({ file, onReset }) {
                     {layer.type === 'text' && (
                       <textarea
                         ref={(el) => {
-                          // Track in layerTextareaRefs for resize snapping
                           if (el) layerTextareaRefs.current[layer.id] = el;
                           else delete layerTextareaRefs.current[layer.id];
-                          // Also assign to textareaRef when editing
                           if (isEditing) textareaRef.current = el;
                         }}
                         className={`editor-layer-textarea ${isEditing ? 'active-input' : 'readonly-input'}`}
@@ -839,16 +959,14 @@ export default function PDFEditor({ file, onReset }) {
                         readOnly={!isEditing}
                         onChange={(e) => {
                           const val = e.target.value;
-                          // When text changes, auto-grow height and clear fixed height on layer
                           const taEl = layerTextareaRefs.current[layer.id];
+                          let newH = layer.height || 40;
                           if (taEl) {
                             taEl.style.height = 'auto';
-                            const newH = taEl.scrollHeight;
+                            newH = Math.max(24, taEl.scrollHeight);
                             taEl.style.height = `${newH}px`;
-                            setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, text: val, height: newH } : l));
-                          } else {
-                            setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, text: val } : l));
                           }
+                          setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, text: val, height: newH } : l));
                         }}
                         style={{
                           fontSize: `${layer.fontSize || 24}px`,
@@ -859,8 +977,8 @@ export default function PDFEditor({ file, onReset }) {
                           backgroundColor: layer.bgColor || 'transparent',
                           textAlign: layer.align || 'left',
                           pointerEvents: isEditing ? 'auto' : 'none',
-                          // Height driven by layer.height when set
-                          height: layer.height ? `${layer.height}px` : 'auto',
+                          width: '100%',
+                          height: 'auto',
                         }}
                       />
                     )}
@@ -880,21 +998,51 @@ export default function PDFEditor({ file, onReset }) {
                       <div
                         className="editor-layer-shape"
                         style={{
-                          borderColor: layer.color || '#e8003d',
+                          borderColor: layer.color || '#000000',
                           backgroundColor: layer.bgColor || 'transparent',
                         }}
                       />
                     )}
 
-                    {/* 8 Blue Control Handles */}
+                    {/* DRAW LAYER — rendered as SVG inside an interactive box */}
+                    {layer.type === 'draw' && layer.points && (
+                      <svg
+                        className="editor-layer-draw-svg"
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          height: '100%',
+                          overflow: 'visible',
+                          pointerEvents: 'none',
+                        }}
+                      >
+                        <path
+                          d={layer.points.reduce((acc, pt, idx) => {
+                            // Translate absolute page coords to coords relative to this layer's bounding box
+                            const rx = pt.x - layer.x;
+                            const ry = pt.y - layer.y;
+                            return `${acc} ${idx === 0 ? 'M' : 'L'} ${rx.toFixed(2)} ${ry.toFixed(2)}`;
+                          }, '')}
+                          stroke={layer.color || '#000000'}
+                          strokeWidth={layer.lineWidth || 3}
+                          fill="none"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    )}
+
+                    {/* Control Handles (For text layers, omit N and S handles as height auto-adapts to content) */}
                     {isSelected && !isEditing && (
                       <div className="editor-resize-handles">
                         <div className="handle handle-nw" onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 'nw')} />
-                        <div className="handle handle-n"  onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 'n')} />
+                        {layer.type !== 'text' && <div className="handle handle-n" onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 'n')} />}
                         <div className="handle handle-ne" onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 'ne')} />
                         <div className="handle handle-e"  onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 'e')} />
                         <div className="handle handle-se" onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 'se')} />
-                        <div className="handle handle-s"  onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 's')} />
+                        {layer.type !== 'text' && <div className="handle handle-s" onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 's')} />}
                         <div className="handle handle-sw" onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 'sw')} />
                         <div className="handle handle-w"  onMouseDown={(e) => handleResizeHandleMouseDown(e, layer, 'w')} />
                       </div>
