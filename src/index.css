@@ -1,35 +1,37 @@
-@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500;600;700&family=Creepster&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 
 /* ============================================================
-   CSS VARIABLES — iHatePDF Dark Horror Theme
+   CSS VARIABLES — iHatePDF (iLovePDF Parody Theme)
+   Clean, modern white & red design identical to ilovepdf.com
    ============================================================ */
 :root {
   /* Colors */
-  --color-bg:          #0a0a0a;
-  --color-bg-2:        #111111;
-  --color-bg-3:        #181818;
-  --color-surface:     #1a1a1a;
-  --color-surface-2:   #222222;
-  --color-border:      #2a2a2a;
-  --color-border-hover:#3a3a3a;
+  --color-bg:          #ffffff;
+  --color-bg-secondary:#f4f5f7;
+  --color-bg-hover:    #f8f9fa;
+  --color-surface:     #ffffff;
+  --color-border:      #e5e7eb;
+  --color-border-hover:#d1d5db;
 
-  --color-primary:     #cc0000;
-  --color-primary-dark:#8b0000;
-  --color-primary-glow:rgba(204,0,0,0.3);
-  --color-accent:      #ff2222;
-  --color-accent-muted:#7a0000;
+  /* ilovepdf signature red */
+  --color-primary:     #e8003d;
+  --color-primary-hover:#c40033;
+  --color-primary-light:#fff0f3;
+  --color-accent:      #ff1a53;
 
-  --color-text:        #e8e8e8;
-  --color-text-muted:  #888888;
-  --color-text-dim:    #555555;
+  /* Typography Colors */
+  --color-text:        #1f2937;
+  --color-text-heading:#111827;
+  --color-text-muted:  #6b7280;
+  --color-text-light:  #9ca3af;
 
   --color-white:       #ffffff;
-  --color-danger:      #ff4444;
-  --color-warning:     #ff8800;
+  --color-danger:      #ef4444;
+  --color-warning:     #f59e0b;
+  --color-success:     #10b981;
 
   /* Typography */
-  --font-title:        'Bebas Neue', 'Impact', sans-serif;
-  --font-body:         'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body:         'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 
   /* Spacing */
   --space-xs:  4px;
@@ -38,37 +40,29 @@
   --space-lg:  24px;
   --space-xl:  40px;
   --space-2xl: 64px;
-  --space-3xl: 96px;
 
   /* Radii */
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
 
   /* Shadows */
-  --shadow-sm:  0 2px 8px rgba(0,0,0,0.5);
-  --shadow-md:  0 4px 20px rgba(0,0,0,0.7);
-  --shadow-lg:  0 8px 40px rgba(0,0,0,0.9);
-  --shadow-red: 0 0 30px rgba(204,0,0,0.4);
-  --shadow-glow:0 0 60px rgba(204,0,0,0.2), 0 0 120px rgba(204,0,0,0.1);
+  --shadow-sm:  0 1px 3px rgba(0,0,0,0.05);
+  --shadow-md:  0 4px 12px rgba(0,0,0,0.08);
+  --shadow-lg:  0 10px 30px rgba(0,0,0,0.12);
+  --shadow-red: 0 8px 24px rgba(232,0,61,0.25);
 
   /* Transitions */
   --transition-fast: 0.15s ease;
   --transition-base: 0.25s ease;
-  --transition-slow: 0.4s ease;
 
   /* Z-index */
-  --z-base:    1;
-  --z-overlay: 100;
-  --z-modal:   200;
   --z-header:  300;
-  --z-tooltip: 400;
+  --z-modal:   500;
 }
 
-/* ============================================================
-   RESET & BASE
-   ============================================================ */
+/* RESET & BASE */
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
@@ -78,32 +72,14 @@
 html {
   scroll-behavior: smooth;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
 }
 
 body {
   font-family: var(--font-body);
   background-color: var(--color-bg);
   color: var(--color-text);
-  line-height: 1.6;
+  line-height: 1.5;
   min-height: 100vh;
-  overflow-x: hidden;
-}
-
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background:
-    radial-gradient(ellipse at 20% 50%, rgba(139,0,0,0.08) 0%, transparent 60%),
-    radial-gradient(ellipse at 80% 20%, rgba(100,0,0,0.05) 0%, transparent 50%);
-  pointer-events: none;
-  z-index: 0;
-}
-
-#root {
-  position: relative;
-  z-index: 1;
 }
 
 a {
@@ -118,19 +94,13 @@ button {
   font-family: var(--font-body);
 }
 
-input, textarea {
+input, textarea, select {
   font-family: var(--font-body);
 }
 
-img, svg {
-  display: block;
-}
-
-/* ============================================================
-   UTILITY CLASSES
-   ============================================================ */
+/* UTILITY CLASSES */
 .container {
-  max-width: 1200px;
+  max-width: 1240px;
   margin: 0 auto;
   padding: 0 var(--space-lg);
 }
@@ -138,36 +108,22 @@ img, svg {
 .btn-primary {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-sm);
-  padding: 14px 32px;
-  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-dark));
+  padding: 16px 40px;
+  background-color: var(--color-primary);
   color: var(--color-white);
-  font-family: var(--font-title);
-  font-size: 1.1rem;
-  letter-spacing: 1px;
+  font-weight: 700;
+  font-size: 1.25rem;
   border-radius: var(--radius-md);
-  border: 1px solid var(--color-primary-dark);
   transition: all var(--transition-base);
-  position: relative;
-  overflow: hidden;
-}
-
-.btn-primary::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(135deg, rgba(255,255,255,0.1), transparent);
-  opacity: 0;
-  transition: opacity var(--transition-base);
+  box-shadow: var(--shadow-red);
 }
 
 .btn-primary:hover {
-  box-shadow: var(--shadow-red);
+  background-color: var(--color-primary-hover);
   transform: translateY(-2px);
-}
-
-.btn-primary:hover::before {
-  opacity: 1;
+  box-shadow: 0 12px 28px rgba(232, 0, 61, 0.35);
 }
 
 .btn-primary:active {
@@ -177,22 +133,22 @@ img, svg {
 .btn-secondary {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-sm);
-  padding: 12px 28px;
-  background: transparent;
+  padding: 12px 24px;
+  background-color: var(--color-white);
   color: var(--color-text);
-  font-family: var(--font-body);
-  font-size: 0.9rem;
-  font-weight: 500;
-  border-radius: var(--radius-md);
+  font-weight: 600;
+  font-size: 0.95rem;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--color-border);
-  transition: all var(--transition-base);
+  transition: all var(--transition-fast);
 }
 
 .btn-secondary:hover {
   border-color: var(--color-primary);
-  color: var(--color-accent);
-  background: rgba(204,0,0,0.05);
+  color: var(--color-primary);
+  background-color: var(--color-primary-light);
 }
 
 /* Scrollbar */
@@ -200,76 +156,9 @@ img, svg {
   width: 8px;
   height: 8px;
 }
-::-webkit-scrollbar-track { background: var(--color-bg-2); }
+::-webkit-scrollbar-track { background: #f1f1f1; }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-accent-muted);
+  background: #ccc;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--color-primary); }
-
-/* Selection */
-::selection {
-  background: var(--color-primary);
-  color: var(--color-white);
-}
-
-/* ============================================================
-   ANIMATIONS
-   ============================================================ */
-@keyframes flicker {
-  0%, 100% { opacity: 1; }
-  92%       { opacity: 1; }
-  93%       { opacity: 0.8; }
-  94%       { opacity: 1; }
-  96%       { opacity: 0.6; }
-  97%       { opacity: 1; }
-}
-
-@keyframes float {
-  0%, 100% { transform: translateY(0px); }
-  50%       { transform: translateY(-8px); }
-}
-
-@keyframes pulse-red {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(204,0,0,0.4); }
-  50%       { box-shadow: 0 0 0 12px rgba(204,0,0,0); }
-}
-
-@keyframes shake {
-  0%, 100% { transform: translateX(0); }
-  20%       { transform: translateX(-4px) rotate(-0.5deg); }
-  40%       { transform: translateX(4px) rotate(0.5deg); }
-  60%       { transform: translateX(-3px); }
-  80%       { transform: translateX(3px); }
-}
-
-@keyframes fade-in-up {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes drip {
-  0%   { transform: scaleY(0); transform-origin: top; }
-  50%  { transform: scaleY(1); transform-origin: top; }
-  100% { transform: scaleY(1) translateY(10px); opacity: 0; }
-}
-
-@keyframes spin-slow {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
-}
-
-@keyframes glitch {
-  0%   { clip-path: polygon(0 0, 100% 0, 100% 35%, 0 35%); transform: translate(-4px, 0); }
-  20%  { clip-path: polygon(0 65%, 100% 65%, 100% 100%, 0 100%); transform: translate(4px, 0); }
-  40%  { clip-path: polygon(0 45%, 100% 45%, 100% 55%, 0 55%); transform: translate(-2px, 0); }
-  60%  { clip-path: polygon(0 20%, 100% 20%, 100% 30%, 0 30%); transform: translate(2px, 0); }
-  80%  { clip-path: polygon(0 0, 100% 0, 100% 10%, 0 10%); transform: translate(-3px, 0); }
-  100% { clip-path: polygon(0 90%, 100% 90%, 100% 100%, 0 100%); transform: translate(0, 0); }
-}

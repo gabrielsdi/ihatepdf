@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Upload, FileText, AlertTriangle } from 'lucide-react';
+import { Upload, FileText, AlertCircle, HardDrive, Cloud, Box } from 'lucide-react';
 import './DropZone.css';
 
 export default function DropZone({ onFileSelect }) {
@@ -9,12 +9,8 @@ export default function DropZone({ onFileSelect }) {
   const validateAndLoad = useCallback((file) => {
     setError('');
     if (!file) return;
-    if (file.type !== 'application/pdf') {
-      setError('Solo aceptamos PDFs. ¿Qué intentabas subir? 😤');
-      return;
-    }
-    if (file.size > 100 * 1024 * 1024) {
-      setError('El archivo es demasiado grande. ¡Ni siquiera queremos tenerlo!');
+    if (file.type !== 'application/pdf' && !file.name.endsWith('.pdf')) {
+      setError('Solo se admiten archivos PDF válidos.');
       return;
     }
     onFileSelect(file);
@@ -42,8 +38,22 @@ export default function DropZone({ onFileSelect }) {
     e.target.value = '';
   }, [validateAndLoad]);
 
+  // Demo file handler in case user wants to test quickly without uploading
+  const handleDemoFile = () => {
+    // Generate a simple sample PDF blob for quick testing
+    fetch('https://raw.githubusercontent.com/mozilla/pdf.js/ba2edeae/web/compressed.tracemonkey-pldi-09.pdf')
+      .then(res => res.blob())
+      .then(blob => {
+        const file = new File([blob], 'ejemplo_documento.pdf', { type: 'application/pdf' });
+        onFileSelect(file);
+      })
+      .catch(() => {
+        setError('No se pudo cargar el archivo de ejemplo.');
+      });
+  };
+
   return (
-    <section className="dropzone-section" id="dropzone-section">
+    <section className="dropzone-section" id="editor-section">
       <div className="container">
         <div
           className={`dropzone ${isDragging ? 'dropzone--dragging' : ''}`}
@@ -52,49 +62,10 @@ export default function DropZone({ onFileSelect }) {
           onDragLeave={handleDragLeave}
           id="pdf-dropzone"
         >
-          {/* Corner decorations */}
-          <div className="dropzone__corner dropzone__corner--tl" />
-          <div className="dropzone__corner dropzone__corner--tr" />
-          <div className="dropzone__corner dropzone__corner--bl" />
-          <div className="dropzone__corner dropzone__corner--br" />
-
-          {/* Animated border */}
-          <div className="dropzone__border-anim" aria-hidden="true" />
-
-          <div className="dropzone__inner">
-            {/* Icon */}
-            <div className={`dropzone__icon-wrap ${isDragging ? 'dropzone__icon-wrap--active' : ''}`}>
-              {isDragging ? (
-                <div className="dropzone__icon-drop">
-                  <span>💀</span>
-                </div>
-              ) : (
-                <div className="dropzone__icon-default">
-                  <FileText size={40} />
-                  <Upload size={20} className="dropzone__upload-arrow" />
-                </div>
-              )}
-            </div>
-
-            {/* Text */}
-            <div className="dropzone__text">
-              <h2 className="dropzone__title">
-                {isDragging
-                  ? 'Suéltalo. Hazlo. 💀'
-                  : 'Selecciona tu PDF para torturarlo'}
-              </h2>
-              <p className="dropzone__subtitle">
-                {isDragging
-                  ? 'Deja caer ese maldito PDF aquí...'
-                  : 'o arrastra y suelta el PDF aquí'}
-              </p>
-            </div>
-
-            {/* Buttons */}
-            <div className="dropzone__actions">
+          <div className="dropzone__content">
+            <div className="dropzone__btn-wrapper">
               <label className="btn-primary dropzone__btn" id="select-pdf-btn">
-                <Upload size={18} />
-                Seleccionar PDF
+                Seleccionar archivo PDF
                 <input
                   type="file"
                   accept=".pdf,application/pdf"
@@ -103,38 +74,45 @@ export default function DropZone({ onFileSelect }) {
                   id="pdf-file-input"
                 />
               </label>
-            </div>
 
-            {/* Source icons (like ilovepdf) */}
-            <div className="dropzone__sources">
-              <span className="dropzone__sources-label">También puedes arrastrar desde:</span>
-              <div className="dropzone__source-icons">
-                <div className="dropzone__source-icon" title="Tu ordenador maldito">
-                  <span>💻</span>
-                </div>
-                <div className="dropzone__source-icon" title="Google Drive (si no lo odias también)">
-                  <span>☁️</span>
-                </div>
-                <div className="dropzone__source-icon" title="Dropbox del infierno">
-                  <span>📦</span>
-                </div>
+              <div className="dropzone__cloud-buttons">
+                <button
+                  className="dropzone__cloud-btn"
+                  title="Google Drive"
+                  onClick={() => alert('Integración con Google Drive disponible en iHatePDF PRO')}
+                >
+                  <Cloud size={20} className="icon-drive" />
+                </button>
+                <button
+                  className="dropzone__cloud-btn"
+                  title="Dropbox"
+                  onClick={() => alert('Integración con Dropbox disponible en iHatePDF PRO')}
+                >
+                  <Box size={20} className="icon-dropbox" />
+                </button>
               </div>
             </div>
 
-            {/* Error message */}
+            <p className="dropzone__drag-text">
+              o arrastra y suelta el PDF aquí
+            </p>
+
+            <div className="dropzone__demo-link">
+              ¿No tienes un PDF a mano? <button type="button" onClick={handleDemoFile} className="dropzone__demo-btn">Usar PDF de prueba</button>
+            </div>
+
             {error && (
               <div className="dropzone__error" id="dropzone-error">
-                <AlertTriangle size={16} />
+                <AlertCircle size={16} />
                 {error}
               </div>
             )}
           </div>
         </div>
 
-        {/* Privacy note */}
-        <p className="dropzone__privacy">
-          🔒 Tu PDF es destruido en nuestros servidores del infierno. Prometemos no usarlo para nada útil.
-        </p>
+        <div className="dropzone__info-strip">
+          <span>🔒 Todos los archivos cargados se procesan en tu navegador sin subirse a ningún servidor.</span>
+        </div>
       </div>
     </section>
   );

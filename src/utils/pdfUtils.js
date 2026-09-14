@@ -1,141 +1,172 @@
-import { PDFDocument, rgb } from 'pdf-lib';
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import * as pdfjsLib from 'pdfjs-dist';
+
+// Configure pdfjs worker dynamically from CDN if module URL not resolved
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
 /**
- * Exports the PDF with all canvas annotations burned in.
- * For each page, renders its annotation canvas on top of the PDF page.
+ * Extracts pages, text items with positions, and renders page background images.
  */
-export async function exportPdfWithAnnotations(file, annotations, canvasRefs, numPages) {
-  // Load original PDF
+export async function extractPdfPages(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });
+  const pdfDoc = await loadingTask.promise;
+  const numPages = pdfDoc.numPages;
+  const pages = [];
+
+  for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+    const page = await pdfDoc.getPage(pageNum);
+    const viewport = page.getViewport({ scale: 1.5 });
+
+    // Render background image to canvas
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+
+    await page.render({ canvasContext: context, viewport }).promise;
+    const bgImageUrl = canvas.toDataURL('image/png');
+
+    // Extract text items
+    const textContent = await page.getTextContent();
+    const items = [];
+
+    textContent.items.forEach((item, index) => {
+      if (!item.str || item.str.trim().length === 0) return;
+
+      const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+      // tx[4] = left, tx[5] = top (from top of viewport)
+      const fontSize = Math.abs(item.transform[0] || item.transform[3] || 12) * viewport.scale;
+
+      items.push({
+        id: `p${pageNum}_i${index}`,
+        originalText: item.str,
+        text: item.str,
+        x: tx[4],
+        y: tx[5] - fontSize,
+        width: item.width * viewport.scale,
+        height: fontSize * 1.2,
+        fontSize: Math.max(10, Math.min(48, Math.round(fontSize / 1.5))), // normalized fontSize
+        pdfX: item.transform[4],
+        pdfY: item.transform[5],
+        pdfWidth: item.width,
+        pdfHeight: item.height || Math.abs(item.transform[3] || 12),
+      });
+    });
+
+    pages.push({
+      pageNum,
+      width: viewport.width,
+      height: viewport.height,
+      pdfWidth: page.view[2] - page.view[0],
+      pdfHeight: page.view[3] - page.view[1],
+      bgImageUrl,
+      items,
+    });
+  }
+
+  return pages;
+}
+
+/**
+ * Exports modified PDF using pdf-lib by covering edited text with white boxes and writing new text.
+ */
+export async function exportPdfWithTextEdits(file, pagesData, addedBlocks = []) {
   const fileArrayBuffer = await file.arrayBuffer();
   const pdfDoc = await PDFDocument.load(fileArrayBuffer);
 
-  const pages = pdfDoc.getPages();
+  // Embed standard font
+  const helveticaFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const pdfPages = pdfDoc.getPages();
 
-  for (let i = 0; i < pages.length; i++) {
-    const pageNum = i + 1;
-    const canvas = canvasRefs[pageNum];
-    const pageAnnotations = annotations[pageNum] || [];
+  for (let i = 0; i < pagesData.length; i++) {
+    const pageData = pagesData[i];
+    const pdfPage = pdfPages[i];
+    if (!pdfPage) continue;
 
-    if (!canvas || pageAnnotations.length === 0) continue;
+    const { height: pdfPageHeight } = pdfPage.getSize();
 
-    const page = pages[i];
-    const { width: pdfWidth, height: pdfHeight } = page.getSize();
+    // Process edited text items
+    pageData.items.forEach((item) => {
+      // Check if text was modified or deleted
+      if (item.text !== item.originalText) {
+        const itemX = item.pdfX;
+        const itemY = item.pdfY;
+        const itemW = Math.max(item.pdfWidth, (item.originalText.length * item.pdfHeight * 0.5));
+        const itemH = item.pdfHeight || item.fontSize || 12;
 
-    // Get canvas dimensions
-    const canvasWidth = canvas.width;
-    const canvasHeight = canvas.height;
+        // Cover old text with a white rectangle
+        pdfPage.drawRectangle({
+          x: itemX - 1,
+          y: itemY - 2,
+          width: itemW + 4,
+          height: itemH + 4,
+          color: rgb(1, 1, 1),
+        });
 
-    // Scale factors from canvas space to PDF space
-    const scaleX = pdfWidth / canvasWidth;
-    const scaleY = pdfHeight / canvasHeight;
+        // Draw new text if not empty
+        if (item.text && item.text.trim()) {
+          try {
+            // Sanitize text for standard font (remove non-latin special characters if needed)
+            const cleanText = item.text.replace(/[^\x00-\x7F]/g, '');
 
-    // Draw each annotation into the PDF page
-    for (const ann of pageAnnotations) {
-      try {
-        switch (ann.type) {
-          case 'text': {
-            const [r, g, b] = hexToRgb(ann.color);
-            // Convert canvas Y to PDF Y (PDF origin is bottom-left)
-            const pdfY = pdfHeight - ann.y * scaleY;
-            page.drawText(ann.text || '', {
-              x: ann.x * scaleX,
-              y: pdfY - (ann.fontSize || 16) * scaleY,
-              size: (ann.fontSize || 16) * Math.min(scaleX, scaleY),
-              color: rgb(r, g, b),
-              opacity: 1,
+            pdfPage.drawText(cleanText || item.text, {
+              x: itemX,
+              y: itemY,
+              size: item.fontSize || 12,
+              font: helveticaFont,
+              color: rgb(0.1, 0.1, 0.1),
             });
-            break;
-          }
-
-          case 'rect': {
-            const [r, g, b] = hexToRgb(ann.color);
-            const pdfY = pdfHeight - (ann.y + ann.h) * scaleY;
-            page.drawRectangle({
-              x: ann.x * scaleX,
-              y: ann.h < 0 ? pdfY + ann.h * scaleY : pdfY,
-              width: Math.abs(ann.w * scaleX),
-              height: Math.abs(ann.h * scaleY),
-              borderColor: rgb(r, g, b),
-              borderWidth: (ann.lineWidth || 3) * Math.min(scaleX, scaleY),
-              opacity: 1,
+          } catch (e) {
+            console.warn('Font encoding fallback:', e);
+            pdfPage.drawText(item.text, {
+              x: itemX,
+              y: itemY,
+              size: item.fontSize || 12,
+              color: rgb(0.1, 0.1, 0.1),
             });
-            break;
           }
-
-          case 'highlight': {
-            const [r, g, b] = hexToRgb(ann.color);
-            const pdfY = pdfHeight - (ann.y + ann.h) * scaleY;
-            page.drawRectangle({
-              x: ann.x * scaleX,
-              y: ann.h < 0 ? pdfY + ann.h * scaleY : pdfY,
-              width: Math.abs(ann.w * scaleX),
-              height: Math.abs(ann.h * scaleY),
-              color: rgb(r, g, b),
-              opacity: 0.35,
-            });
-            break;
-          }
-
-          case 'freehand': {
-            if (!ann.points || ann.points.length < 2) break;
-            const [r, g, b] = hexToRgb(ann.color);
-            // Draw as a series of lines
-            for (let j = 0; j < ann.points.length - 1; j++) {
-              const p1 = ann.points[j];
-              const p2 = ann.points[j + 1];
-              page.drawLine({
-                start: { x: p1.x * scaleX, y: pdfHeight - p1.y * scaleY },
-                end:   { x: p2.x * scaleX, y: pdfHeight - p2.y * scaleY },
-                color: rgb(r, g, b),
-                thickness: (ann.lineWidth || 3) * Math.min(scaleX, scaleY),
-                opacity: 1,
-              });
-            }
-            break;
-          }
-
-          case 'line': {
-            const [r, g, b] = hexToRgb(ann.color);
-            page.drawLine({
-              start: { x: ann.x * scaleX, y: pdfHeight - ann.y * scaleY },
-              end:   { x: (ann.x + ann.w) * scaleX, y: pdfHeight - (ann.y + ann.h) * scaleY },
-              color: rgb(r, g, b),
-              thickness: (ann.lineWidth || 3) * Math.min(scaleX, scaleY),
-              opacity: 1,
-            });
-            break;
-          }
-
-          default:
-            break;
         }
-      } catch (e) {
-        console.warn('Error drawing annotation:', ann.type, e);
       }
-    }
+    });
+
+    // Process user added custom text blocks
+    const pageAdded = addedBlocks.filter(b => b.pageNum === pageData.pageNum);
+    pageAdded.forEach((b) => {
+      if (!b.text || !b.text.trim()) return;
+
+      // Scale coordinates from canvas space to PDF space
+      const scaleX = pageData.pdfWidth / pageData.width;
+      const scaleY = pageData.pdfHeight / pageData.height;
+
+      const pdfX = b.x * scaleX;
+      const pdfY = pdfPageHeight - (b.y * scaleY);
+
+      try {
+        const cleanText = b.text.replace(/[^\x00-\x7F]/g, '');
+        pdfPage.drawText(cleanText || b.text, {
+          x: pdfX,
+          y: pdfY - (b.fontSize || 14),
+          size: (b.fontSize || 14) * scaleY,
+          font: helveticaFont,
+          color: rgb(0, 0, 0),
+        });
+      } catch (err) {
+        console.warn('Failed to draw custom text:', err);
+      }
+    });
   }
 
-  // Save and trigger download
+  // Save modified PDF
   const pdfBytes = await pdfDoc.save();
   const blob = new Blob([pdfBytes], { type: 'application/pdf' });
   const url = URL.createObjectURL(blob);
 
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${file.name.replace('.pdf', '')}_torturado.pdf`;
+  a.download = `${file.name.replace('.pdf', '')}_editado.pdf`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-}
-
-/**
- * Convert hex color "#rrggbb" to [r, g, b] in 0-1 range for pdf-lib
- */
-function hexToRgb(hex) {
-  const clean = hex.replace('#', '');
-  const r = parseInt(clean.substring(0, 2), 16) / 255;
-  const g = parseInt(clean.substring(2, 4), 16) / 255;
-  const b = parseInt(clean.substring(4, 6), 16) / 255;
-  return [r, g, b];
 }

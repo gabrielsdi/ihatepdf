@@ -1,389 +1,324 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
-import { Document, Page, pdfjs } from 'react-pdf';
-import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Download, X } from 'lucide-react';
-import Toolbar from '../Toolbar/Toolbar';
-import { exportPdfWithAnnotations } from '../../utils/pdfUtils';
-import 'react-pdf/dist/Page/AnnotationLayer.css';
-import 'react-pdf/dist/Page/TextLayer.css';
+import { useState, useEffect } from 'react';
+import { Download, FileText, RefreshCw, Type, Plus, Trash2, Edit3, Layout, CheckCircle, ArrowLeft, Loader2 } from 'lucide-react';
+import { extractPdfPages, exportPdfWithTextEdits } from '../../utils/pdfUtils';
 import './PDFEditor.css';
 
-// Set pdfjs worker
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString();
-
-export default function PDFEditor({ file, onClose }) {
-  const [numPages, setNumPages] = useState(null);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [scale, setScale] = useState(1.2);
-  const [tool, setTool] = useState('hand');
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [annotations, setAnnotations] = useState({}); // { pageNum: [annotation, ...] }
-  const [textInput, setTextInput] = useState(null);
-  const [textValue, setTextValue] = useState('');
-  const [toolOptions, setToolOptions] = useState({
-    color: '#ff0000',
-    fontSize: 16,
-    lineWidth: 3,
-    shape: 'rect',
-  });
+export default function PDFEditor({ file, onReset }) {
+  const [loading, setLoading] = useState(true);
+  const [pagesData, setPagesData] = useState([]);
+  const [activePage, setActivePage] = useState(1);
+  const [viewMode, setViewMode] = useState('doc'); // 'doc' (Google Drive style) or 'visual' (Page overlay style)
+  const [addedBlocks, setAddedBlocks] = useState([]);
   const [exporting, setExporting] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
 
-  const canvasRef = useRef({});
-  const ctxRef = useRef({});
-  const drawStartRef = useRef(null);
-  const lastPosRef = useRef(null);
-  const pageContainerRef = useRef(null);
-
-  // Initialize canvas for a page
-  const initCanvas = useCallback((pageNum, canvas) => {
-    if (!canvas) return;
-    canvasRef.current[pageNum] = canvas;
-    const ctx = canvas.getContext('2d');
-    ctxRef.current[pageNum] = ctx;
-
-    // Redraw existing annotations
-    const pageAnnotations = annotations[pageNum] || [];
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    pageAnnotations.forEach(ann => drawAnnotation(ctx, ann));
-  }, [annotations]);
-
-  const drawAnnotation = (ctx, ann) => {
-    ctx.save();
-    ctx.strokeStyle = ann.color;
-    ctx.fillStyle = ann.color;
-    ctx.lineWidth = ann.lineWidth || 3;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    switch (ann.type) {
-      case 'freehand':
-        if (ann.points && ann.points.length > 1) {
-          ctx.beginPath();
-          ctx.moveTo(ann.points[0].x, ann.points[0].y);
-          ann.points.forEach(p => ctx.lineTo(p.x, p.y));
-          ctx.stroke();
-        }
-        break;
-
-      case 'text':
-        ctx.font = `${ann.fontSize || 16}px Inter, sans-serif`;
-        ctx.fillStyle = ann.color;
-        ctx.fillText(ann.text, ann.x, ann.y);
-        break;
-
-      case 'rect':
-        ctx.strokeRect(ann.x, ann.y, ann.w, ann.h);
-        break;
-
-      case 'circle': {
-        const rx = ann.w / 2;
-        const ry = ann.h / 2;
-        ctx.beginPath();
-        ctx.ellipse(ann.x + rx, ann.y + ry, Math.abs(rx), Math.abs(ry), 0, 0, Math.PI * 2);
-        ctx.stroke();
-        break;
-      }
-
-      case 'line':
-        ctx.beginPath();
-        ctx.moveTo(ann.x, ann.y);
-        ctx.lineTo(ann.x + ann.w, ann.y + ann.h);
-        ctx.stroke();
-        break;
-
-      case 'highlight':
-        ctx.globalAlpha = 0.35;
-        ctx.fillStyle = ann.color;
-        ctx.fillRect(ann.x, ann.y, ann.w, ann.h);
-        ctx.globalAlpha = 1;
-        break;
-
-      default:
-        break;
-    }
-    ctx.restore();
-  };
-
-  // Redraw canvas when annotations change
   useEffect(() => {
-    Object.entries(canvasRef.current).forEach(([pageNum, canvas]) => {
-      if (!canvas) return;
-      const ctx = canvas.getContext('2d');
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      (annotations[pageNum] || []).forEach(ann => drawAnnotation(ctx, ann));
-    });
-  }, [annotations]);
+    let isMounted = true;
+    async function loadPdf() {
+      try {
+        setLoading(true);
+        const pages = await extractPdfPages(file);
+        if (isMounted) {
+          setPagesData(pages);
+          setLoading(false);
+        }
+      } catch (err) {
+        console.error('Error loading PDF text:', err);
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    }
+    loadPdf();
+    return () => { isMounted = false; };
+  }, [file]);
 
-  const getPos = (e, canvas) => {
-    const rect = canvas.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    return {
-      x: (clientX - rect.left) * (canvas.width / rect.width),
-      y: (clientY - rect.top) * (canvas.height / rect.height),
-    };
+  const handleTextChange = (pageNum, itemId, newText) => {
+    setPagesData(prevPages =>
+      prevPages.map(page => {
+        if (page.pageNum !== pageNum) return page;
+        return {
+          ...page,
+          items: page.items.map(item =>
+            item.id === itemId ? { ...item, text: newText } : item
+          )
+        };
+      })
+    );
   };
 
-  const handleCanvasMouseDown = useCallback((e, pageNum) => {
-    if (tool === 'hand') return;
-    e.preventDefault();
-    const canvas = canvasRef.current[pageNum];
-    if (!canvas) return;
-    const pos = getPos(e, canvas);
+  const handleFontSizeChange = (pageNum, itemId, delta) => {
+    setPagesData(prevPages =>
+      prevPages.map(page => {
+        if (page.pageNum !== pageNum) return page;
+        return {
+          ...page,
+          items: page.items.map(item => {
+            if (item.id === itemId) {
+              const newSize = Math.max(8, Math.min(72, (item.fontSize || 12) + delta));
+              return { ...item, fontSize: newSize };
+            }
+            return item;
+          })
+        };
+      })
+    );
+  };
 
-    if (tool === 'text') {
-      setTextInput({ x: e.clientX, y: e.clientY, pageX: pos.x, pageY: pos.y, pageNum });
-      setTextValue('');
-      return;
-    }
+  const handleAddCustomBlock = () => {
+    const newBlock = {
+      id: `custom_${Date.now()}`,
+      pageNum: activePage,
+      text: 'Nuevo texto añadido...',
+      x: 50,
+      y: 100 + (addedBlocks.length * 30),
+      fontSize: 14,
+    };
+    setAddedBlocks([...addedBlocks, newBlock]);
+  };
 
-    setIsDrawing(true);
-    drawStartRef.current = pos;
-    lastPosRef.current = pos;
-
-    if (tool === 'freehand') {
-      setAnnotations(prev => ({
-        ...prev,
-        [pageNum]: [...(prev[pageNum] || []), {
-          type: 'freehand', points: [pos], color: toolOptions.color, lineWidth: toolOptions.lineWidth,
-        }],
-      }));
-    }
-  }, [tool, toolOptions]);
-
-  const handleCanvasMouseMove = useCallback((e, pageNum) => {
-    if (!isDrawing) return;
-    e.preventDefault();
-    const canvas = canvasRef.current[pageNum];
-    if (!canvas) return;
-    const pos = getPos(e, canvas);
-
-    if (tool === 'freehand') {
-      setAnnotations(prev => {
-        const pageAnns = [...(prev[pageNum] || [])];
-        const last = { ...pageAnns[pageAnns.length - 1] };
-        last.points = [...last.points, pos];
-        pageAnns[pageAnns.length - 1] = last;
-        return { ...prev, [pageNum]: pageAnns };
-      });
-    }
-
-    lastPosRef.current = pos;
-  }, [isDrawing, tool]);
-
-  const handleCanvasMouseUp = useCallback((e, pageNum) => {
-    if (!isDrawing) return;
-    e.preventDefault();
-    setIsDrawing(false);
-    const canvas = canvasRef.current[pageNum];
-    if (!canvas) return;
-    const pos = getPos(e, canvas);
-    const start = drawStartRef.current;
-
-    if (['rect', 'circle', 'line', 'highlight'].includes(tool)) {
-      setAnnotations(prev => ({
-        ...prev,
-        [pageNum]: [...(prev[pageNum] || []), {
-          type: tool,
-          x: start.x, y: start.y,
-          w: pos.x - start.x, h: pos.y - start.y,
-          color: toolOptions.color,
-          lineWidth: toolOptions.lineWidth,
-        }],
-      }));
-    }
-  }, [isDrawing, tool, toolOptions]);
-
-  const handleTextSubmit = useCallback(() => {
-    if (!textInput || !textValue.trim()) {
-      setTextInput(null);
-      return;
-    }
-    setAnnotations(prev => ({
-      ...prev,
-      [textInput.pageNum]: [...(prev[textInput.pageNum] || []), {
-        type: 'text',
-        x: textInput.pageX, y: textInput.pageY,
-        text: textValue,
-        color: toolOptions.color,
-        fontSize: toolOptions.fontSize,
-      }],
-    }));
-    setTextInput(null);
-    setTextValue('');
-  }, [textInput, textValue, toolOptions]);
-
-  const handleUndo = useCallback(() => {
-    setAnnotations(prev => {
-      const pageAnns = [...(prev[currentPage] || [])];
-      pageAnns.pop();
-      return { ...prev, [currentPage]: pageAnns };
-    });
-  }, [currentPage]);
-
-  const handleExport = useCallback(async () => {
-    setExporting(true);
+  const handleExport = async () => {
     try {
-      await exportPdfWithAnnotations(file, annotations, canvasRef.current, numPages);
+      setExporting(true);
+      await exportPdfWithTextEdits(file, pagesData, addedBlocks);
+      setSuccessMessage('¡PDF editado y descargado con éxito!');
+      setTimeout(() => setSuccessMessage(''), 4000);
     } catch (err) {
-      console.error('Export error:', err);
+      console.error('Error exporting PDF:', err);
+      alert('Error al exportar el PDF editado. Inténtalo de nuevo.');
     } finally {
       setExporting(false);
     }
-  }, [file, annotations, numPages]);
-
-  const getCursor = () => {
-    const cursors = { hand: 'grab', text: 'text', freehand: 'crosshair', rect: 'crosshair', circle: 'crosshair', line: 'crosshair', highlight: 'crosshair' };
-    return cursors[tool] || 'default';
   };
 
+  if (loading) {
+    return (
+      <div className="pdf-editor-loading">
+        <Loader2 size={48} className="spinner" />
+        <h2>Convirtiendo PDF a Documento Editable...</h2>
+        <p>Extrayendo párrafos, texto y estructura como en Google Drive...</p>
+      </div>
+    );
+  }
+
+  const currentPageData = pagesData.find(p => p.pageNum === activePage) || pagesData[0];
+
   return (
-    <div className="pdf-editor" id="pdf-editor">
-      {/* Top bar */}
-      <div className="pdf-editor__topbar">
-        <div className="pdf-editor__topbar-left">
-          <button className="pdf-editor__close-btn" onClick={onClose} id="close-editor-btn" title="Cerrar editor">
-            <X size={20} /> Volver
+    <div className="pdf-editor" id="pdf-editor-container">
+      {/* Top Editor Toolbar */}
+      <header className="pdf-editor__toolbar">
+        <div className="pdf-editor__toolbar-left">
+          <button onClick={onReset} className="pdf-editor__back-btn" title="Cargar otro archivo">
+            <ArrowLeft size={18} />
+            <span>Volver</span>
           </button>
-          <span className="pdf-editor__filename">{file?.name}</span>
+          <div className="pdf-editor__file-info">
+            <FileText size={18} className="pdf-editor__file-icon" />
+            <span className="pdf-editor__filename">{file.name}</span>
+            <span className="pdf-editor__page-count">{pagesData.length} págs</span>
+          </div>
         </div>
 
-        <div className="pdf-editor__topbar-center">
+        {/* View Mode Toggle (Doc vs Visual) */}
+        <div className="pdf-editor__view-toggle">
           <button
-            className="pdf-editor__nav-btn"
-            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-            disabled={currentPage === 1}
-            id="prev-page-btn"
+            className={`pdf-editor__toggle-btn ${viewMode === 'doc' ? 'active' : ''}`}
+            onClick={() => setViewMode('doc')}
           >
-            <ChevronLeft size={18} />
+            <Layout size={16} />
+            <span>Modo Documento (Google Docs)</span>
           </button>
-          <span className="pdf-editor__page-info">
-            Página <strong>{currentPage}</strong> de <strong>{numPages || '?'}</strong>
-          </span>
           <button
-            className="pdf-editor__nav-btn"
-            onClick={() => setCurrentPage(p => Math.min(numPages, p + 1))}
-            disabled={currentPage === numPages}
-            id="next-page-btn"
+            className={`pdf-editor__toggle-btn ${viewMode === 'visual' ? 'active' : ''}`}
+            onClick={() => setViewMode('visual')}
           >
-            <ChevronRight size={18} />
+            <Edit3 size={16} />
+            <span>Modo Edición Visual</span>
           </button>
         </div>
 
-        <div className="pdf-editor__topbar-right">
-          <button className="pdf-editor__zoom-btn" onClick={() => setScale(s => Math.max(0.5, s - 0.2))} id="zoom-out-btn" title="Alejar">
-            <ZoomOut size={18} />
+        {/* Action Buttons */}
+        <div className="pdf-editor__toolbar-right">
+          <button onClick={handleAddCustomBlock} className="btn-secondary pdf-editor__add-btn">
+            <Plus size={16} />
+            <span>Añadir Texto</span>
           </button>
-          <span className="pdf-editor__zoom-label">{Math.round(scale * 100)}%</span>
-          <button className="pdf-editor__zoom-btn" onClick={() => setScale(s => Math.min(3, s + 0.2))} id="zoom-in-btn" title="Acercar">
-            <ZoomIn size={18} />
-          </button>
+
           <button
-            className={`pdf-editor__export-btn ${exporting ? 'pdf-editor__export-btn--loading' : ''}`}
             onClick={handleExport}
             disabled={exporting}
-            id="export-pdf-btn"
+            className="btn-primary pdf-editor__export-btn"
+            id="download-edited-pdf-btn"
           >
-            <Download size={18} />
-            {exporting ? 'Exportando...' : 'Descargar PDF destruido'}
+            {exporting ? (
+              <>
+                <Loader2 size={18} className="spinner" />
+                <span>Generando PDF...</span>
+              </>
+            ) : (
+              <>
+                <Download size={18} />
+                <span>Descargar PDF Editado</span>
+              </>
+            )}
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* Main editor area */}
-      <div className="pdf-editor__main">
-        {/* Sidebar toolbar */}
-        <Toolbar
-          tool={tool}
-          setTool={setTool}
-          toolOptions={toolOptions}
-          setToolOptions={setToolOptions}
-          onUndo={handleUndo}
-          canUndo={(annotations[currentPage] || []).length > 0}
-        />
-
-        {/* PDF canvas area */}
-        <div className="pdf-editor__canvas-area" ref={pageContainerRef}>
-          <Document
-            file={file}
-            onLoadSuccess={({ numPages }) => setNumPages(numPages)}
-            loading={
-              <div className="pdf-editor__loading">
-                <div className="pdf-editor__loading-skull">💀</div>
-                <p>Cargando tu PDF para torturarlo...</p>
-              </div>
-            }
-            error={
-              <div className="pdf-editor__error">
-                <p>⚠️ Error cargando el PDF. ¿Intentas colarnos algo que no es PDF?</p>
-              </div>
-            }
-          >
-            {Array.from({ length: numPages || 0 }, (_, i) => i + 1).map(pageNum => (
-              <div
-                key={pageNum}
-                className={`pdf-editor__page-wrapper ${pageNum === currentPage ? 'pdf-editor__page-wrapper--active' : ''}`}
-                style={{ display: pageNum === currentPage ? 'block' : 'none' }}
+      {/* Main Workspace Layout */}
+      <div className="pdf-editor__workspace">
+        {/* Left Sidebar - Thumbnails */}
+        <aside className="pdf-editor__sidebar">
+          <h3 className="pdf-editor__sidebar-title">Páginas</h3>
+          <div className="pdf-editor__thumbnails">
+            {pagesData.map(p => (
+              <button
+                key={p.pageNum}
+                className={`pdf-editor__thumb ${activePage === p.pageNum ? 'pdf-editor__thumb--active' : ''}`}
+                onClick={() => setActivePage(p.pageNum)}
               >
-                <div className="pdf-editor__page-inner" style={{ position: 'relative', display: 'inline-block' }}>
-                  <Page
-                    pageNumber={pageNum}
-                    scale={scale}
-                    renderTextLayer={true}
-                    renderAnnotationLayer={false}
-                    onRenderSuccess={(page) => {
-                      const canvas = canvasRef.current[pageNum];
-                      if (canvas) {
-                        canvas.width = page.width * scale;
-                        canvas.height = page.height * scale;
-                        // Redraw
-                        const ctx = canvas.getContext('2d');
-                        ctx.clearRect(0, 0, canvas.width, canvas.height);
-                        (annotations[pageNum] || []).forEach(ann => drawAnnotation(ctx, ann));
-                      }
-                    }}
-                  />
-                  {/* Annotation canvas overlay */}
-                  <canvas
-                    ref={el => initCanvas(pageNum, el)}
-                    className="pdf-editor__annotation-canvas"
-                    style={{ cursor: getCursor() }}
-                    onMouseDown={e => handleCanvasMouseDown(e, pageNum)}
-                    onMouseMove={e => handleCanvasMouseMove(e, pageNum)}
-                    onMouseUp={e => handleCanvasMouseUp(e, pageNum)}
-                    onMouseLeave={e => handleCanvasMouseUp(e, pageNum)}
-                    id={`annotation-canvas-${pageNum}`}
-                  />
+                {p.bgImageUrl ? (
+                  <img src={p.bgImageUrl} alt={`Página ${p.pageNum}`} />
+                ) : (
+                  <div className="pdf-editor__thumb-placeholder">{p.pageNum}</div>
+                )}
+                <span className="pdf-editor__thumb-label">Página {p.pageNum}</span>
+              </button>
+            ))}
+          </div>
+        </aside>
+
+        {/* Center Content Area */}
+        <main className="pdf-editor__content-area">
+          {successMessage && (
+            <div className="pdf-editor__alert-success">
+              <CheckCircle size={20} />
+              <span>{successMessage}</span>
+            </div>
+          )}
+
+          {/* VIEW MODE 1: Google Docs / Drive Document Style */}
+          {viewMode === 'doc' && (
+            <div className="pdf-editor__doc-view">
+              <div className="pdf-editor__doc-sheet">
+                <div className="pdf-editor__doc-header">
+                  <h2>Página {currentPageData?.pageNum} - Párrafos Editables</h2>
+                  <p>Haz clic en cualquier texto para modificarlo directamente como en Word / Google Docs:</p>
+                </div>
+
+                <div className="pdf-editor__doc-body">
+                  {currentPageData?.items.map((item) => (
+                    <div key={item.id} className="pdf-editor__text-item-row">
+                      <div className="pdf-editor__text-item-controls">
+                        <span className="pdf-editor__text-size-label">{item.fontSize}px</span>
+                        <button
+                          onClick={() => handleFontSizeChange(currentPageData.pageNum, item.id, 1)}
+                          title="Aumentar tamaño de fuente"
+                        >
+                          +
+                        </button>
+                        <button
+                          onClick={() => handleFontSizeChange(currentPageData.pageNum, item.id, -1)}
+                          title="Disminuir tamaño de fuente"
+                        >
+                          -
+                        </button>
+                      </div>
+
+                      <textarea
+                        className="pdf-editor__doc-textarea"
+                        value={item.text}
+                        onChange={(e) => handleTextChange(currentPageData.pageNum, item.id, e.target.value)}
+                        rows={Math.max(1, Math.ceil(item.text.length / 70))}
+                        placeholder="Escribe texto..."
+                      />
+                    </div>
+                  ))}
+
+                  {/* Added custom text blocks for this page */}
+                  {addedBlocks.filter(b => b.pageNum === activePage).map((block) => (
+                    <div key={block.id} className="pdf-editor__text-item-row pdf-editor__text-item-row--custom">
+                      <span className="pdf-editor__custom-tag">Texto Nuevo</span>
+                      <input
+                        type="text"
+                        className="pdf-editor__doc-input"
+                        value={block.text}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setAddedBlocks(addedBlocks.map(b => b.id === block.id ? { ...b, text: val } : b));
+                        }}
+                      />
+                      <button
+                        className="pdf-editor__delete-block-btn"
+                        onClick={() => setAddedBlocks(addedBlocks.filter(b => b.id !== block.id))}
+                        title="Eliminar bloque de texto"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
               </div>
-            ))}
-          </Document>
-        </div>
-      </div>
+            </div>
+          )}
 
-      {/* Floating text input */}
-      {textInput && (
-        <div
-          className="pdf-editor__text-input-wrap"
-          style={{ top: textInput.y, left: textInput.x }}
-          id="text-input-float"
-        >
-          <input
-            autoFocus
-            className="pdf-editor__text-input"
-            value={textValue}
-            onChange={e => setTextValue(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') handleTextSubmit(); if (e.key === 'Escape') setTextInput(null); }}
-            placeholder="Escribe tu odio aquí..."
-            style={{ color: toolOptions.color, fontSize: toolOptions.fontSize }}
-            id="text-annotation-input"
-          />
-          <button className="pdf-editor__text-confirm" onClick={handleTextSubmit} id="confirm-text-btn">✓</button>
-          <button className="pdf-editor__text-cancel" onClick={() => setTextInput(null)} id="cancel-text-btn">✕</button>
-        </div>
-      )}
+          {/* VIEW MODE 2: Visual Overlay Mode */}
+          {viewMode === 'visual' && (
+            <div className="pdf-editor__visual-view">
+              <div
+                className="pdf-editor__page-canvas-wrapper"
+                style={{
+                  width: `${currentPageData?.width}px`,
+                  height: `${currentPageData?.height}px`,
+                }}
+              >
+                {/* Background image */}
+                <img
+                  src={currentPageData?.bgImageUrl}
+                  alt={`Página ${currentPageData?.pageNum}`}
+                  className="pdf-editor__page-bg"
+                />
+
+                {/* Overlaid editable inputs */}
+                {currentPageData?.items.map((item) => (
+                  <input
+                    key={item.id}
+                    type="text"
+                    className="pdf-editor__overlay-input"
+                    value={item.text}
+                    onChange={(e) => handleTextChange(currentPageData.pageNum, item.id, e.target.value)}
+                    style={{
+                      left: `${item.x}px`,
+                      top: `${item.y}px`,
+                      fontSize: `${item.fontSize}px`,
+                      minWidth: `${Math.max(60, item.width)}px`,
+                    }}
+                  />
+                ))}
+
+                {/* Overlaid added custom blocks */}
+                {addedBlocks.filter(b => b.pageNum === activePage).map((block) => (
+                  <input
+                    key={block.id}
+                    type="text"
+                    className="pdf-editor__overlay-input pdf-editor__overlay-input--new"
+                    value={block.text}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setAddedBlocks(addedBlocks.map(b => b.id === block.id ? { ...b, text: val } : b));
+                    }}
+                    style={{
+                      left: `${block.x}px`,
+                      top: `${block.y}px`,
+                      fontSize: `${block.fontSize}px`,
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        </main>
+      </div>
     </div>
   );
 }

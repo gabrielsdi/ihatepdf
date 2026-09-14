@@ -14,27 +14,25 @@ export default function App() {
     setPdfFile(file);
   };
 
-  const handleCloseEditor = () => {
+  const handleReset = () => {
     setPdfFile(null);
   };
 
   return (
-    <>
-      {/* PDF Editor fullscreen overlay */}
-      {pdfFile && (
-        <PDFEditor file={pdfFile} onClose={handleCloseEditor} />
-      )}
-
-      {/* Main landing page */}
-      <div className={`app ${pdfFile ? 'app--hidden' : ''}`}>
-        <Header />
-        <main className="app__main">
-          <Hero />
-          <DropZone onFileSelect={handleFileSelect} />
-          <FeaturesSection />
-        </main>
-        <Footer />
-      </div>
-    </>
+    <div className="app">
+      <Header />
+      <main className="app__main">
+        {pdfFile ? (
+          <PDFEditor file={pdfFile} onReset={handleReset} />
+        ) : (
+          <>
+            <Hero />
+            <DropZone onFileSelect={handleFileSelect} />
+            <FeaturesSection />
+          </>
+        )}
+      </main>
+      {!pdfFile && <Footer />}
+    </div>
   );
 }

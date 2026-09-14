@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "homepage": "https://gabrielsplendiani.github.io/ihatepdf",
+  "homepage": "https://gabrielsdi.github.io/ihatepdf",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
