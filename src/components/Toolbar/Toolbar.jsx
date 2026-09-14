@@ -2,13 +2,13 @@ import { Hand, Type, PenTool, Square, Circle, Minus, Highlighter, Undo2 } from '
 import './Toolbar.css';
 
 const tools = [
-  { id: 'hand',      icon: <Hand size={20} />,        label: 'Navegar',   group: null },
-  { id: 'text',      icon: <Type size={20} />,         label: 'Texto',     group: 'anotación' },
-  { id: 'freehand',  icon: <PenTool size={20} />,      label: 'Dibujo libre', group: 'anotación' },
-  { id: 'highlight', icon: <Highlighter size={20} />,  label: 'Resaltar',  group: 'anotación' },
-  { id: 'rect',      icon: <Square size={20} />,       label: 'Rectángulo',group: 'formas' },
-  { id: 'circle',    icon: <Circle size={20} />,       label: 'Círculo',   group: 'formas' },
-  { id: 'line',      icon: <Minus size={20} />,        label: 'Línea',     group: 'formas' },
+  { id: 'hand',      icon: <Hand size={20} />,        label: 'Navigate',   group: null },
+  { id: 'text',      icon: <Type size={20} />,         label: 'Text',       group: 'annotation' },
+  { id: 'freehand',  icon: <PenTool size={20} />,      label: 'Draw',       group: 'annotation' },
+  { id: 'highlight', icon: <Highlighter size={20} />,  label: 'Highlight',  group: 'annotation' },
+  { id: 'rect',      icon: <Square size={20} />,       label: 'Rectangle',  group: 'shapes' },
+  { id: 'circle',    icon: <Circle size={20} />,       label: 'Circle',     group: 'shapes' },
+  { id: 'line',      icon: <Minus size={20} />,        label: 'Line',       group: 'shapes' },
 ];
 
 const COLORS = [
@@ -24,7 +24,7 @@ export default function Toolbar({ tool, setTool, toolOptions, setToolOptions, on
   const groups = [...new Set(tools.map(t => t.group))];
 
   return (
-    <aside className="toolbar" id="editor-toolbar" role="toolbar" aria-label="Herramientas de edición">
+    <aside className="toolbar" id="editor-toolbar" role="toolbar" aria-label="Editing tools">
       {/* Tool Groups */}
       {groups.map((group, gi) => (
         <div key={gi} className="toolbar__group">
@@ -68,7 +68,7 @@ export default function Toolbar({ tool, setTool, toolOptions, setToolOptions, on
             className="toolbar__color-custom"
             value={toolOptions.color}
             onChange={e => setToolOptions(o => ({ ...o, color: e.target.value }))}
-            title="Color personalizado"
+            title="Custom color"
             id="custom-color-input"
           />
         </div>
@@ -77,7 +77,7 @@ export default function Toolbar({ tool, setTool, toolOptions, setToolOptions, on
       {/* Font size (for text tool) */}
       {tool === 'text' && (
         <div className="toolbar__group">
-          <div className="toolbar__group-label">TAMAÑO</div>
+          <div className="toolbar__group-label">SIZE</div>
           <select
             className="toolbar__select"
             value={toolOptions.fontSize}
@@ -94,7 +94,7 @@ export default function Toolbar({ tool, setTool, toolOptions, setToolOptions, on
       {/* Line width (for drawing tools) */}
       {['freehand', 'rect', 'circle', 'line'].includes(tool) && (
         <div className="toolbar__group">
-          <div className="toolbar__group-label">GROSOR</div>
+          <div className="toolbar__group-label">WIDTH</div>
           <div className="toolbar__line-widths" id="line-width-picker">
             {LINE_WIDTHS.map(w => (
               <button
@@ -120,13 +120,14 @@ export default function Toolbar({ tool, setTool, toolOptions, setToolOptions, on
           className="toolbar__tool toolbar__tool--danger"
           onClick={onUndo}
           disabled={!canUndo}
-          title="Deshacer última acción"
+          title="Undo last action"
           id="undo-btn"
         >
           <Undo2 size={20} />
-          <span className="toolbar__tool-label">Deshacer</span>
+          <span className="toolbar__tool-label">Undo</span>
         </button>
       </div>
     </aside>
   );
 }
+

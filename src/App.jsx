@@ -2,7 +2,6 @@ import { useState } from 'react';
 import Header from './components/Header/Header';
 import Hero from './components/Hero/Hero';
 import DropZone from './components/DropZone/DropZone';
-import FeaturesSection from './components/FeaturesSection/FeaturesSection';
 import Footer from './components/Footer/Footer';
 import PDFEditor from './components/PDFEditor/PDFEditor';
 import './App.css';
@@ -28,7 +27,6 @@ export default function App() {
           <>
             <Hero />
             <DropZone onFileSelect={handleFileSelect} />
-            <FeaturesSection />
           </>
         )}
       </main>
@@ -36,3 +34,4 @@ export default function App() {
     </div>
   );
 }
+

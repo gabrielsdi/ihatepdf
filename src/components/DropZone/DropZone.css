@@ -35,12 +35,24 @@
 }
 
 .dropzone__btn {
-  font-size: 1.35rem;
-  padding: 20px 48px;
-  border-radius: 12px;
+  font-size: 1.6rem;
+  padding: 24px 64px;
+  border-radius: 16px;
   font-weight: 700;
   cursor: pointer;
+  background-color: #e5322d;
+  color: #ffffff;
+  box-shadow: 0 8px 24px rgba(229, 50, 45, 0.3);
+  transition: all var(--transition-base);
+  letter-spacing: -0.2px;
 }
+
+.dropzone__btn:hover {
+  background-color: #d12823;
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(229, 50, 45, 0.4);
+}
+
 
 .dropzone__hidden-input {
   display: none;

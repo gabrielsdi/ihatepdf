@@ -19,6 +19,8 @@ export default function PDFEditor({ file, onReset }) {
   const [layers, setLayers] = useState([]);
   const [selectedLayerId, setSelectedLayerId] = useState(null);
   const [editingLayerId, setEditingLayerId] = useState(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [draggedLayerId, setDraggedLayerId] = useState(null);
 
   // Clipboard for Copy/Paste
   const copiedLayerRef = useRef(null);
@@ -122,6 +124,11 @@ export default function PDFEditor({ file, onReset }) {
           e.preventDefault();
           handlePasteLayer();
         }
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedLayerId) {
+        if (activeTag !== 'textarea' && activeTag !== 'input' && !editingLayerId) {
+          e.preventDefault();
+          handleDeleteSelectedLayer();
+        }
       } else if (e.key === 'Escape') {
         setSelectedLayerId(null);
         setEditingLayerId(null);
@@ -130,7 +137,7 @@ export default function PDFEditor({ file, onReset }) {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedLayer, handleCopySelectedLayer, handlePasteLayer]);
+  }, [selectedLayer, selectedLayerId, editingLayerId, handleCopySelectedLayer, handlePasteLayer]);
 
   // 1. ADD TEXT LAYER (Auto-adjusting width & height, 36px font, non-bold)
   const handleAddTextLayer = () => {
@@ -142,7 +149,7 @@ export default function PDFEditor({ file, onReset }) {
       id: newId,
       pageNum: activePage,
       type: 'text',
-      text: `Tu texto aquí ${count}`,
+      text: `Your text here ${count}`,
       x: 100,
       y: 100 + (count * 30),
       width: null, // null means AUTO-FIT width to text content!
@@ -233,10 +240,41 @@ export default function PDFEditor({ file, onReset }) {
   // Delete all layers for current page
   const handleDeleteAllPageLayers = () => {
     if (layers.filter(l => l.pageNum === activePage).length === 0) return;
-    if (!window.confirm('¿Eliminar todos los elementos añadidos en la página actual?')) return;
+    setShowDeleteModal(true);
+  };
+
+  const confirmDeleteAllLayers = () => {
     setLayers(prev => prev.filter(l => l.pageNum !== activePage));
     setSelectedLayerId(null);
     setEditingLayerId(null);
+    setShowDeleteModal(false);
+  };
+
+  // Layer Reordering Handlers (Forward = Top of Stack, Backward = Bottom of Stack)
+  const moveLayerForward = (layerId, e) => {
+    if (e) e.stopPropagation();
+    const idx = layers.findIndex(l => l.id === layerId);
+    if (idx < 0 || idx >= layers.length - 1) return;
+    setLayers(prev => {
+      const next = [...prev];
+      const temp = next[idx];
+      next[idx] = next[idx + 1];
+      next[idx + 1] = temp;
+      return next;
+    });
+  };
+
+  const moveLayerBackward = (layerId, e) => {
+    if (e) e.stopPropagation();
+    const idx = layers.findIndex(l => l.id === layerId);
+    if (idx <= 0) return;
+    setLayers(prev => {
+      const next = [...prev];
+      const temp = next[idx];
+      next[idx] = next[idx - 1];
+      next[idx - 1] = temp;
+      return next;
+    });
   };
 
   // --------------------------------------------------------------------------
@@ -486,7 +524,7 @@ export default function PDFEditor({ file, onReset }) {
       await exportPdfWithLayers(file, pagesData, layers);
     } catch (err) {
       console.error('Error saving PDF:', err);
-      alert('Error al guardar el PDF. Inténtalo de nuevo.');
+      alert('Error saving PDF. Please try again.');
     } finally {
       setExporting(false);
     }
@@ -496,8 +534,8 @@ export default function PDFEditor({ file, onReset }) {
     return (
       <div className="pdf-editor-loading">
         <Loader2 size={44} className="spinner" />
-        <h2>Cargando documento PDF...</h2>
-        <p>Generando vista previa nítida a pantalla completa...</p>
+        <h2>Loading PDF document...</h2>
+        <p>Generating crisp full-screen preview...</p>
       </div>
     );
   }
@@ -558,7 +596,7 @@ export default function PDFEditor({ file, onReset }) {
             className={`editor-icon-btn ${selectedLayer?.isBold ? 'active' : ''}`}
             onClick={() => updateSelectedLayer('isBold', !selectedLayer?.isBold)}
             disabled={!selectedLayer || selectedLayer.type !== 'text'}
-            title="Negrita"
+            title="Bold"
           >
             <Bold size={16} />
           </button>
@@ -566,12 +604,12 @@ export default function PDFEditor({ file, onReset }) {
             className={`editor-icon-btn ${selectedLayer?.isItalic ? 'active' : ''}`}
             onClick={() => updateSelectedLayer('isItalic', !selectedLayer?.isItalic)}
             disabled={!selectedLayer || selectedLayer.type !== 'text'}
-            title="Cursiva"
+            title="Italic"
           >
             <Italic size={16} />
           </button>
 
-          <div className="editor-color-btn-wrapper" title="Color de elemento">
+          <div className="editor-color-btn-wrapper" title="Element color">
             <span className="editor-color-label" style={{ color: selectedLayer?.color || '#000' }}>A</span>
             <input
               type="color"
@@ -586,7 +624,7 @@ export default function PDFEditor({ file, onReset }) {
             className={`editor-icon-btn ${selectedLayer?.bgColor === '#ffffff' ? 'active' : ''}`}
             onClick={() => updateSelectedLayer('bgColor', selectedLayer?.bgColor === '#ffffff' ? 'transparent' : '#ffffff')}
             disabled={!selectedLayer}
-            title="Fondo Blanco (Tapar texto original)"
+            title="White Background (Cover original text)"
           >
             <Square size={16} style={{ fill: selectedLayer?.bgColor === '#ffffff' ? '#ffffff' : 'transparent' }} />
           </button>
@@ -622,7 +660,7 @@ export default function PDFEditor({ file, onReset }) {
             className="editor-icon-btn"
             onClick={handleCopySelectedLayer}
             disabled={!selectedLayer}
-            title="Copiar capa (Cmd+C)"
+            title="Copy layer (Cmd+C)"
           >
             <Copy size={16} />
           </button>
@@ -639,7 +677,7 @@ export default function PDFEditor({ file, onReset }) {
             className="editor-icon-btn editor-trash-btn"
             onClick={handleDeleteSelectedLayer}
             disabled={!selectedLayer}
-            title="Eliminar elemento seleccionado"
+            title="Delete selected element"
           >
             <Trash2 size={16} />
           </button>
@@ -648,20 +686,10 @@ export default function PDFEditor({ file, onReset }) {
 
       {/* 2. SECONDARY TOOL STRIP */}
       <div className="editor-tool-strip" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
-        <div className="editor-mode-pill">
-          <button className="editor-mode-tab active">
-            <Type size={14} />
-            <span>Editar PDF</span>
-            <span className="editor-crown-icon">👑</span>
-          </button>
-        </div>
-
-        <div className="editor-divider-vertical" />
-
         <button
           className={`editor-tool-btn ${toolMode === 'hand' ? 'active' : ''}`}
           onClick={() => setToolMode('hand')}
-          title="Herramienta Manito (Desplazar vista)"
+          title="Hand tool (Pan view)"
         >
           <Hand size={18} />
         </button>
@@ -669,7 +697,7 @@ export default function PDFEditor({ file, onReset }) {
         <button
           className="editor-tool-btn editor-tool-btn--highlight"
           onClick={handleAddTextLayer}
-          title="Añadir Texto"
+          title="Add Text"
         >
           <span className="editor-text-add-icon">A|</span>
         </button>
@@ -677,7 +705,7 @@ export default function PDFEditor({ file, onReset }) {
         <button
           className="editor-tool-btn"
           onClick={() => imageInputRef.current?.click()}
-          title="Añadir Imagen"
+          title="Add Image"
         >
           <ImageIcon size={18} />
         </button>
@@ -685,7 +713,7 @@ export default function PDFEditor({ file, onReset }) {
         <button
           className={`editor-tool-btn ${toolMode === 'draw' ? 'active' : ''}`}
           onClick={() => setToolMode('draw')}
-          title="Dibujar a mano alzada"
+          title="Freehand draw"
         >
           <Edit2 size={18} />
         </button>
@@ -693,7 +721,7 @@ export default function PDFEditor({ file, onReset }) {
         <button
           className="editor-tool-btn"
           onClick={handleAddShapeLayer}
-          title="Añadir Forma / Rectángulo"
+          title="Add Shape / Rectangle"
         >
           <Square size={18} />
         </button>
@@ -710,7 +738,7 @@ export default function PDFEditor({ file, onReset }) {
               onClick={() => setActivePage(p.pageNum)}
             >
               <div className="editor-thumb-img-wrap">
-                <img src={p.bgImageUrl} alt={`Página ${p.pageNum}`} />
+                <img src={p.bgImageUrl} alt={`Page ${p.pageNum}`} />
               </div>
               <span className="editor-thumb-num">{p.pageNum}</span>
             </button>
@@ -841,7 +869,7 @@ export default function PDFEditor({ file, onReset }) {
                     {layer.type === 'image' && (
                       <img
                         src={layer.imageDataUrl}
-                        alt="Capa de imagen"
+                        alt="Image layer"
                         className="editor-layer-img"
                         draggable={false}
                       />
@@ -893,32 +921,32 @@ export default function PDFEditor({ file, onReset }) {
             </button>
             <span className="editor-page-indicator">{activePage} / {pagesData.length}</span>
             <div className="editor-divider-small" />
-            <button onClick={() => setZoom(prev => Math.max(80, prev - 20))} title="Alejar">
+            <button onClick={() => setZoom(prev => Math.max(80, prev - 20))} title="Zoom out">
               <Minus size={14} />
             </button>
-            <button onClick={() => setZoom(prev => Math.min(500, prev + 20))} title="Acercar">
+            <button onClick={() => setZoom(prev => Math.min(500, prev + 20))} title="Zoom in">
               <Plus size={14} />
             </button>
             <span className="editor-zoom-indicator">{displayZoomPercent}%</span>
           </div>
         </main>
 
-        {/* Right Sidebar ("Editar PDF") */}
+        {/* Right Sidebar ("Edit PDF") */}
         <aside className="editor-right-sidebar" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
           <div className="editor-sidebar-header">
-            <h2>Editar PDF</h2>
+            <h2>Edit PDF</h2>
           </div>
 
           <div className="editor-info-banner">
             <Info size={20} className="editor-info-icon" />
-            <p>Reordena los elementos y muévelos delante o detrás del documento.</p>
+            <p>Reorder and position elements on your document.</p>
           </div>
 
           <div className="editor-layer-section-header">
-            <span className="editor-page-label">Página {activePage}</span>
+            <span className="editor-page-label">Page {activePage}</span>
             {currentPageLayers.length > 0 && (
               <button className="editor-clear-all-btn" onClick={handleDeleteAllPageLayers}>
-                Eliminar todos
+                Delete all
               </button>
             )}
           </div>
@@ -927,16 +955,37 @@ export default function PDFEditor({ file, onReset }) {
           <div className="editor-layers-list">
             {currentPageLayers.length === 0 ? (
               <div className="editor-layers-empty">
-                Haz clic en el botón <strong>A|</strong> o en <strong>🖼️</strong> superior para añadir capas.
+                Click the <strong>A|</strong> or <strong>🖼️</strong> buttons above to add layers.
               </div>
             ) : (
-              currentPageLayers.map((layer) => {
+              // Display layers top-to-bottom (reversed visual stack)
+              [...currentPageLayers].reverse().map((layer) => {
                 const isSelected = selectedLayerId === layer.id;
+                const defaultName = layer.type === 'text' ? layer.text : `${layer.type.toUpperCase()} Element`;
 
                 return (
                   <div
                     key={layer.id}
                     className={`editor-layer-item ${isSelected ? 'selected' : ''}`}
+                    draggable
+                    onDragStart={(e) => {
+                      setDraggedLayerId(layer.id);
+                      e.dataTransfer.effectAllowed = 'move';
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      if (!draggedLayerId || draggedLayerId === layer.id) return;
+                      const fromIdx = layers.findIndex(l => l.id === draggedLayerId);
+                      const toIdx = layers.findIndex(l => l.id === layer.id);
+                      if (fromIdx < 0 || toIdx < 0) return;
+                      setLayers(prev => {
+                        const next = [...prev];
+                        const [moved] = next.splice(fromIdx, 1);
+                        next.splice(toIdx, 0, moved);
+                        return next;
+                      });
+                    }}
+                    onDragEnd={() => setDraggedLayerId(null)}
                     onClick={(e) => {
                       e.stopPropagation();
                       setSelectedLayerId(layer.id);
@@ -944,7 +993,7 @@ export default function PDFEditor({ file, onReset }) {
                     }}
                   >
                     <div className="editor-layer-item-left">
-                      <Move size={14} className="editor-layer-drag-handle" />
+                      <Move size={14} className="editor-layer-drag-handle" title="Drag to reorder" />
                       <div className="editor-layer-icon">
                         {layer.type === 'text' && 'A'}
                         {layer.type === 'image' && '🖼️'}
@@ -954,12 +1003,10 @@ export default function PDFEditor({ file, onReset }) {
                       <input
                         type="text"
                         className="editor-layer-title-input"
-                        value={layer.type === 'text' ? layer.text : `${layer.type.toUpperCase()} Elemento`}
+                        value={layer.name !== undefined ? layer.name : defaultName}
                         onChange={(e) => {
-                          if (layer.type === 'text') {
-                            const val = e.target.value;
-                            setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, text: val } : l));
-                          }
+                          const val = e.target.value;
+                          setLayers(prev => prev.map(l => l.id === layer.id ? { ...l, name: val } : l));
                         }}
                         onClick={(e) => e.stopPropagation()}
                       />
@@ -967,21 +1014,34 @@ export default function PDFEditor({ file, onReset }) {
 
                     <div className="editor-layer-item-actions">
                       <button
+                        onClick={(e) => moveLayerForward(layer.id, e)}
+                        title="Bring forward (Up)"
+                      >
+                        <ChevronUp size={14} />
+                      </button>
+                      <button
+                        onClick={(e) => moveLayerBackward(layer.id, e)}
+                        title="Send backward (Down)"
+                      >
+                        <ChevronDown size={14} />
+                      </button>
+                      <button
                         onClick={(e) => {
                           e.stopPropagation();
                           handleCopySelectedLayer();
                         }}
-                        title="Copiar capa"
+                        title="Copy layer"
                       >
                         <Copy size={14} />
                       </button>
                       <button
+                        className="editor-layer-delete-btn"
                         onClick={(e) => {
                           e.stopPropagation();
                           setLayers(prev => prev.filter(l => l.id !== layer.id));
                           if (selectedLayerId === layer.id) setSelectedLayerId(null);
                         }}
-                        title="Eliminar elemento"
+                        title="Delete element"
                       >
                         <Trash2 size={14} />
                       </button>
@@ -992,7 +1052,7 @@ export default function PDFEditor({ file, onReset }) {
             )}
           </div>
 
-          {/* Bottom Guardar Cambios Button */}
+          {/* Bottom Save Changes Button */}
           <div className="editor-sidebar-footer">
             <button
               onClick={handleExport}
@@ -1003,11 +1063,11 @@ export default function PDFEditor({ file, onReset }) {
               {exporting ? (
                 <>
                   <Loader2 size={20} className="spinner" />
-                  <span>Guardando...</span>
+                  <span>Saving...</span>
                 </>
               ) : (
                 <>
-                  <span>Guardar cambios</span>
+                  <span>Save changes</span>
                   <ArrowRight size={20} />
                 </>
               )}
@@ -1015,6 +1075,37 @@ export default function PDFEditor({ file, onReset }) {
           </div>
         </aside>
       </div>
+
+      {/* STYLED DELETE ALL MODAL */}
+      {showDeleteModal && (
+        <div className="editor-modal-backdrop" onClick={() => setShowDeleteModal(false)}>
+          <div className="editor-modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="editor-modal-header">
+              <div className="editor-modal-icon">
+                <Trash2 size={22} />
+              </div>
+              <h3>Delete All Elements?</h3>
+            </div>
+            <p className="editor-modal-body">
+              Are you sure you want to delete all added elements on <strong>Page {activePage}</strong>? This action cannot be undone.
+            </p>
+            <div className="editor-modal-actions">
+              <button
+                className="editor-modal-btn editor-modal-btn--secondary"
+                onClick={() => setShowDeleteModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="editor-modal-btn editor-modal-btn--danger"
+                onClick={confirmDeleteAllLayers}
+              >
+                Delete All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

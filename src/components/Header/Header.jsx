@@ -14,12 +14,9 @@ export default function Header() {
             i<span className="header__logo-brand">Hate</span>PDF
           </span>
         </a>
-
-        {/* Clean nav items matching ilovepdf */}
-        <div className="header__nav-links">
-          <a href="#editor-section" className="header__nav-link header__nav-link--active">EDITAR PDF</a>
-        </div>
       </nav>
     </header>
   );
 }
+
+
