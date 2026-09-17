@@ -6,10 +6,50 @@
 
 .footer__bottom {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 10px;
   font-size: 0.85rem;
   color: #9ca3af;
   text-align: center;
 }
 
+@media (min-width: 640px) {
+  .footer__bottom {
+    flex-direction: row;
+    justify-content: space-between;
+  }
+}
+
+.footer__copy {
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.footer__legal-links {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.footer__legal-btn {
+  background: none;
+  border: none;
+  color: #6366f1;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.15s ease;
+}
+
+.footer__legal-btn:hover {
+  color: #4f46e5;
+  text-decoration: underline;
+}
+
+.footer__legal-sep {
+  color: #cbd5e1;
+  font-size: 10px;
+}

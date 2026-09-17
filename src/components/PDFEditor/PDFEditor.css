@@ -30,11 +30,44 @@
   to { transform: rotate(360deg); }
 }
 
+/* Master Wrapper with Ads */
+.pdf-editor-wrapper-with-ads {
+  display: flex;
+  width: 100%;
+  height: calc(100vh - 60px);
+  background-color: #f3f4f6;
+  overflow: hidden;
+  position: relative;
+}
+
+.editor-ad-sidebar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 8px;
+  background-color: #f8fafc;
+  border-right: 1px solid #e2e8f0;
+  z-index: 10;
+  flex-shrink: 0;
+}
+
+.editor-ad-sidebar--right {
+  border-right: none;
+  border-left: 1px solid #e2e8f0;
+}
+
+@media (max-width: 1200px) {
+  .editor-ad-sidebar {
+    display: none;
+  }
+}
+
 /* Master Layout */
 .pdf-editor-pro {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 60px);
+  flex: 1;
+  height: 100%;
   background-color: #f3f4f6;
   user-select: none;
   overflow: hidden;

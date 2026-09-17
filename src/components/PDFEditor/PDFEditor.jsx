@@ -4,10 +4,14 @@ import {
   Trash2, Move, ChevronUp, ChevronDown, Plus, Minus, Info, ArrowRight, Loader2, AlignLeft, AlignCenter, AlignRight, Copy, MousePointer2
 } from 'lucide-react';
 import { extractPdfPages, exportPdfWithLayers } from '../../utils/pdfUtils';
+import { ADS_CONFIG } from '../../config/adsConfig';
+import AdBanner from '../Ads/AdBanner';
+import DownloadAdModal from '../Ads/DownloadAdModal';
 import './PDFEditor.css';
 
 export default function PDFEditor({ file, onReset }) {
   const [loading, setLoading] = useState(true);
+  const [showDownloadAdModal, setShowDownloadAdModal] = useState(false);
   const [pagesData, setPagesData] = useState([]);
   const [activePage, setActivePage] = useState(1);
 
@@ -629,6 +633,14 @@ export default function PDFEditor({ file, onReset }) {
     }
   };
 
+  const handleSaveClick = () => {
+    if (ADS_CONFIG.enabled && ADS_CONFIG.showDownloadModal) {
+      setShowDownloadAdModal(true);
+    } else {
+      handleExport();
+    }
+  };
+
   if (loading) {
     return (
       <div className="pdf-editor-loading">
@@ -645,12 +657,19 @@ export default function PDFEditor({ file, onReset }) {
   const displayZoomPercent = Math.round(zoom / 2);
 
   return (
-    <div
-      className="pdf-editor-pro"
-      onMouseMove={handleGlobalMouseMove}
-      onMouseUp={handleGlobalMouseUp}
-      id="pdf-editor-container"
-    >
+    <div className="pdf-editor-wrapper-with-ads">
+      {ADS_CONFIG.enabled && ADS_CONFIG.showSidebars && (
+        <aside className="editor-ad-sidebar editor-ad-sidebar--left">
+          <AdBanner format="sidebar-left" scriptContent={ADS_CONFIG.scripts?.sidebarLeftScript} />
+        </aside>
+      )}
+
+      <div
+        className="pdf-editor-pro"
+        onMouseMove={handleGlobalMouseMove}
+        onMouseUp={handleGlobalMouseUp}
+        id="pdf-editor-container"
+      >
       <input
         type="file"
         ref={imageInputRef}
@@ -1203,7 +1222,7 @@ export default function PDFEditor({ file, onReset }) {
           {/* Bottom Save Changes Button */}
           <div className="editor-sidebar-footer">
             <button
-              onClick={handleExport}
+              onClick={handleSaveClick}
               disabled={exporting}
               className="editor-save-changes-btn"
               id="save-pdf-changes-btn"
@@ -1223,6 +1242,13 @@ export default function PDFEditor({ file, onReset }) {
           </div>
         </aside>
       </div>
+      </div>
+
+      {ADS_CONFIG.enabled && ADS_CONFIG.showSidebars && (
+        <aside className="editor-ad-sidebar editor-ad-sidebar--right">
+          <AdBanner format="sidebar-right" scriptContent={ADS_CONFIG.scripts?.sidebarRightScript} />
+        </aside>
+      )}
 
       {/* STYLED DELETE ALL MODAL */}
       {showDeleteModal && (
@@ -1254,6 +1280,14 @@ export default function PDFEditor({ file, onReset }) {
           </div>
         </div>
       )}
+
+      {/* PRE-DOWNLOAD AD MODAL */}
+      <DownloadAdModal
+        isOpen={showDownloadAdModal}
+        onClose={() => setShowDownloadAdModal(false)}
+        onDownload={handleExport}
+        fileName={file?.name ? `${file.name.replace('.pdf', '')}_editado.pdf` : 'documento.pdf'}
+      />
     </div>
   );
 }
