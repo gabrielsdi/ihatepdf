@@ -4,6 +4,8 @@ import Hero from './components/Hero/Hero';
 import DropZone from './components/DropZone/DropZone';
 import Footer from './components/Footer/Footer';
 import PDFEditor from './components/PDFEditor/PDFEditor';
+import AdBanner from './components/Ads/AdBanner';
+import { ADS_CONFIG } from './config/adsConfig';
 import './App.css';
 
 export default function App() {
@@ -27,6 +29,9 @@ export default function App() {
           <>
             <Hero />
             <DropZone onFileSelect={handleFileSelect} />
+            {ADS_CONFIG.enabled && (
+              <AdBanner format="horizontal" scriptContent={ADS_CONFIG.scripts?.horizontalScript} />
+            )}
           </>
         )}
       </main>
